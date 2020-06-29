@@ -8,12 +8,17 @@ import Development.Shake.Util
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Except (throwError)
+import Data.List
+import Data.Maybe
 
 import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
 import qualified Data.Text.IO as T
 import qualified Data.Map.Strict as M
 import qualified Text.Atom.Feed as A
+import qualified Text.Atom.Feed.Export as AE
 import qualified Text.Pandoc as P
+import qualified Text.Pandoc.Shared as PS
 
 unwrap :: (Show e, MonadFail m) => Either e a -> m a
 unwrap (Left error) = fail $ show error
@@ -69,6 +74,37 @@ buildIndexMetadata=
           . M.insert (T.pack "href") (P.MetaString (T.pack path))
           . P.unMeta $ meta)
 
+hostName :: FilePath
+hostName = "https://mt-caret.github.io"
+
+blogName :: T.Text
+blogName = T.pack "blog"
+
+safeHead :: [a] -> Maybe a
+safeHead [] = Nothing
+safeHead (x : _) = Just x
+
+safeMax :: Ord a => [a] -> Maybe a
+safeMax = safeHead . reverse . sort
+
+toEntry :: FilePath -> P.Meta -> A.Entry
+toEntry path metadata =
+  (A.nullEntry
+    (T.pack (hostName </> path))
+    (A.TextString (PS.stringify (P.docTitle metadata)))
+    (PS.stringify (P.docDate metadata)))
+      { A.entryAuthors =
+        (\author -> A.nullPerson { A.personName = PS.stringify author } )
+          <$> P.docAuthors metadata
+      }
+
+buildFeed :: [P.Meta] -> A.Feed
+buildFeed metadata =
+  A.nullFeed
+    (T.pack (hostName </> "atom.xml"))
+    (A.TextString blogName)
+    (fromMaybe (T.pack "") . safeMax . fmap (PS.stringify . P.docDate) $ metadata)
+
 main :: IO ()
 main = do
   let base = "_build"
@@ -77,7 +113,7 @@ main = do
     action $ do
       postPaths <- getPostPaths
       need $ map (\postPath -> base </> postPath -<.> "html") postPaths
-    want [ base </> "index.html" ]
+    want . fmap (base </>) $ [ "index.html", "atom.xml" ]
 
     getTemplate <- newCache $ runPandocIO .
       \case
@@ -101,9 +137,20 @@ main = do
       let document = P.Pandoc metadata []
       runPandocIO $ writePandoc (writerOptions template) out document
 
+    (base </> "atom.xml") %> \out -> do
+      postPaths <- getPostPaths
+      need postPaths
+      metadata <- traverse (readMetadata readerOptions) postPaths
+      let feed = (buildFeed metadata)
+                    { A.feedEntries = zipWith toEntry postPaths metadata
+                    , A.feedLinks = [ A.nullLink (T.pack hostName) ]
+                    }
+      liftIO . T.writeFile out . TL.toStrict . fromJust . AE.textFeed $ feed
+      return ()
+
     phony "clean" $ do
         putInfo "Cleaning files in _build"
-        removeFilesAfter base ["//*.html"]
+        removeFilesAfter base ["//*.html", "//*.xml"]
 
     phony "serve" $ do
       cmd_ "python -m http.server --directory _build"
@@ -111,7 +158,7 @@ main = do
 {- TODO:
  - * [x] show index of all posts
  - * [ ] static assets (css/images/js/etc.)
- - * [ ] create atom feed
+ - * [x] create atom feed
  - * [ ] new post generation
  - * [ ] syntax highlighting?
  - * [ ] drafts
