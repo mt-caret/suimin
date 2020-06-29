@@ -119,8 +119,9 @@ main = do
 
     (base </> "posts/*.html") %> \out -> do
       let src = dropDirectory1 $ out -<.> "md"
-      need [ src ]
-      template <- getTemplate Nothing
+      let templatePath = "post-template.html"
+      need [ src, templatePath ]
+      template <- getTemplate (Just templatePath)
       buildPost readerOptions (writerOptions template) src out
 
     (base </> "index.html") %> \out -> do
