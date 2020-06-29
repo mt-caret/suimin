@@ -146,7 +146,6 @@ main = do
                     , A.feedLinks = [ A.nullLink (T.pack hostName) ]
                     }
       liftIO . T.writeFile out . TL.toStrict . fromJust . AE.textFeed $ feed
-      return ()
 
     phony "clean" $ do
         putInfo "Cleaning files in _build"
