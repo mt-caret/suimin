@@ -103,7 +103,7 @@ main = do
 
     phony "clean" $ do
         putInfo "Cleaning files in _build"
-        removeFilesAfter base ["//*"]
+        removeFilesAfter base ["//*.html"]
 
     phony "serve" $ do
       cmd_ "python -m http.server --directory _build"
