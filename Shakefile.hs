@@ -1,5 +1,5 @@
 {-# Language LambdaCase #-}
-{-# Language LambdaCase #-}
+{-# Language ApplicativeDo #-}
 import Development.Shake
 import Development.Shake.Command
 import Development.Shake.FilePath
@@ -48,6 +48,7 @@ buildPost :: P.ReaderOptions -> P.WriterOptions -> FilePath -> FilePath -> Actio
 buildPost readerOptions writerOptions srcPath dstPath = runPandocIO $ do
   content <- liftIO $ T.readFile srcPath
   document@(P.Pandoc metadata _) <- P.readMarkdown readerOptions content
+  liftIO $ print metadata
   writePandoc writerOptions dstPath document
 
 compileTemplate :: P.PandocMonad m => FilePath -> m (P.Template T.Text)
@@ -57,12 +58,24 @@ compileTemplate path = do
     Left error -> throwError $ P.PandocTemplateError (T.pack error)
     Right x -> return x
 
+buildIndexMetadata :: [ (FilePath, P.Meta) ] -> P.Meta
+buildIndexMetadata=
+  P.Meta
+    . M.insert (T.pack "title") (P.MetaString (T.pack "index"))
+    . M.singleton (T.pack "posts")
+      . P.MetaList
+      . fmap (\(path, meta) ->
+          P.MetaMap
+          . M.insert (T.pack "href") (P.MetaString (T.pack path))
+          . P.unMeta $ meta)
+
 main :: IO ()
 main = do
   let base = "_build"
+  let getPostPaths = getDirectoryFiles "" [ "posts//*.md" ]
   shakeArgs shakeOptions { shakeFiles = "_shake" } $ do
     action $ do
-      postPaths <- getDirectoryFiles "" [ "posts//*.md" ]
+      postPaths <- getPostPaths
       need $ map (\postPath -> base </> postPath -<.> "html") postPaths
     want [ base </> "index.html" ]
 
@@ -79,9 +92,13 @@ main = do
 
     (base </> "index.html") %> \out -> do
       let templatePath = "index-template.html"
-      need [ templatePath ]
+      postPaths <- getPostPaths
+      need (templatePath : postPaths)
       template <- getTemplate $ Just templatePath
-      let document = P.Pandoc (P.Meta M.empty) []
+      metadata <-
+        buildIndexMetadata <$> traverse
+          (\path -> (,) (path -<.> "html") <$> readMetadata readerOptions path) postPaths
+      let document = P.Pandoc metadata []
       runPandocIO $ writePandoc (writerOptions template) out document
 
     phony "clean" $ do
@@ -92,11 +109,11 @@ main = do
       cmd_ "python -m http.server --directory _build"
 
 {- TODO:
- - * show index of all posts
- - * static assets (css/images/js/etc.)
- - * create atom feed
- - * new post generation
- - * syntax highlighting?
- - * drafts
- - * watch
+ - * [x] show index of all posts
+ - * [ ] static assets (css/images/js/etc.)
+ - * [ ] create atom feed
+ - * [ ] new post generation
+ - * [ ] syntax highlighting?
+ - * [ ] drafts
+ - * [ ] watch
  -}

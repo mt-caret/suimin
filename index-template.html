@@ -57,6 +57,11 @@ $endif$
 $table-of-contents$
 </nav>
 $endif$
+<ul>
+$for(posts)$
+  <li><a href="$posts.href$">$posts.title$</a></li>
+$endfor$
+</ul>
 $body$
 $for(include-after)$
 $include-after$
