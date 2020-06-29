@@ -84,9 +84,6 @@ safeHead :: [a] -> Maybe a
 safeHead [] = Nothing
 safeHead (x : _) = Just x
 
-safeMax :: Ord a => [a] -> Maybe a
-safeMax = safeHead . reverse . sort
-
 toEntry :: FilePath -> P.Meta -> A.Entry
 toEntry path metadata =
   (A.nullEntry
@@ -103,7 +100,7 @@ buildFeed metadata =
   A.nullFeed
     (T.pack (hostName </> "atom.xml"))
     (A.TextString blogName)
-    (fromMaybe (T.pack "") . safeMax . fmap (PS.stringify . P.docDate) $ metadata)
+    (fromMaybe (T.pack "") . safeHead . fmap (PS.stringify . P.docDate) $ metadata)
 
 main :: IO ()
 main = do
@@ -138,7 +135,7 @@ main = do
       runPandocIO $ writePandoc (writerOptions template) out document
 
     (base </> "atom.xml") %> \out -> do
-      postPaths <- getPostPaths
+      postPaths <- reverse . sort <$> getPostPaths
       need postPaths
       metadata <- traverse (readMetadata readerOptions) postPaths
       let feed = (buildFeed metadata)
