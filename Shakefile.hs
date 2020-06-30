@@ -44,6 +44,16 @@ readMetadata readerOptions srcPath = runPandocIO $ do
   (P.Pandoc metadata _) <- P.readMarkdown readerOptions content
   return metadata
 
+isDraft :: P.Meta -> Bool
+isDraft metadata =
+  case P.lookupMeta (T.pack "draft") metadata of
+    Nothing -> False
+    Just (P.MetaBool b) -> b
+    Just m -> error $ "expected MetaBool for 'draft' but found: " ++ (show m)
+
+canPublish :: P.Meta -> Bool
+canPublish = not . isDraft
+
 writePandoc :: P.WriterOptions -> FilePath -> P.Pandoc -> P.PandocIO ()
 writePandoc writerOptions dstPath document = do
   html <- P.writeHtml5String writerOptions document
@@ -127,10 +137,10 @@ main = do
     (base </> "index.html") %> \out -> do
       let templatePath = "index-template.html"
       postPaths <- getPostPaths
-      need (templatePath : postPaths)
+      need $ templatePath : postPaths
       template <- getTemplate $ Just templatePath
       metadata <-
-        buildIndexMetadata <$> traverse
+        (buildIndexMetadata . filter (canPublish . snd)) <$> traverse
           (\path -> (,) (path -<.> "html") <$> readMetadata readerOptions path) postPaths
       let document = P.Pandoc metadata []
       runPandocIO $ writePandoc (writerOptions template) out document
@@ -138,7 +148,9 @@ main = do
     (base </> "atom.xml") %> \out -> do
       postPaths <- reverse . sort <$> getPostPaths
       need postPaths
-      metadata <- traverse (readMetadata readerOptions) postPaths
+      metadata <-
+        filter canPublish <$>
+        traverse (readMetadata readerOptions) postPaths
       let feed = (buildFeed metadata)
                     { A.feedEntries = zipWith toEntry postPaths metadata
                     , A.feedLinks = [ A.nullLink (T.pack hostName) ]
@@ -158,6 +170,6 @@ main = do
  - * [x] create atom feed
  - * [ ] new post generation
  - * [ ] syntax highlighting?
- - * [ ] drafts
+ - * [x] drafts
  - * [ ] watch
  -}
