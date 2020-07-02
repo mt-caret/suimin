@@ -1,0 +1,38 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.33.0.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: acff2b7ca08c6679fc682361efe83b5c3ae5af21fa1e57fee61b84bcc0f1daa0
+
+name:           suimin
+version:        0.1.0.0
+category:       Web
+homepage:       https://github.com/mt-caret/suimin#readme
+author:         mt-caret
+maintainer:     mtakeda.enigsol@gmail.com
+copyright:      2020 mt-caret
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+
+executable suimin
+  main-is: Main.hs
+  other-modules:
+      Paths_suimin
+  hs-source-dirs:
+      src
+  build-depends:
+      base >=4.7 && <5
+    , containers
+    , feed
+    , mtl
+    , pandoc
+    , shake
+    , text
+    , wai-app-static
+    , warp
+  default-language: Haskell2010

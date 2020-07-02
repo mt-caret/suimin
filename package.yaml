@@ -1,0 +1,28 @@
+name:                suimin
+version:             0.1.0.0
+#synopsis:
+#description:
+homepage:            https://github.com/mt-caret/suimin#readme
+license:             BSD3
+author:              mt-caret
+maintainer:          mtakeda.enigsol@gmail.com
+copyright:           2020 mt-caret
+category:            Web
+extra-source-files:
+- README.md
+
+dependencies:
+  - base >= 4.7 && < 5
+  - shake
+  - text
+  - containers
+  - mtl
+  - feed
+  - pandoc
+  - wai-app-static
+  - warp
+
+executables:
+  suimin:
+    source-dirs:      src
+    main:             Main.hs

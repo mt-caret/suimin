@@ -1,5 +1,7 @@
 {-# Language LambdaCase #-}
 {-# Language ApplicativeDo #-}
+module Main where
+
 import Development.Shake
 import Development.Shake.Command
 import Development.Shake.FilePath
