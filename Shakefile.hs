@@ -19,6 +19,8 @@ import qualified Text.Atom.Feed as A
 import qualified Text.Atom.Feed.Export as AE
 import qualified Text.Pandoc as P
 import qualified Text.Pandoc.Shared as PS
+import qualified Network.Wai.Application.Static as WS
+import Network.Wai.Handler.Warp (run)
 
 unwrap :: (Show e, MonadFail m) => Either e a -> m a
 unwrap (Left error) = fail $ show error
@@ -116,6 +118,7 @@ main :: IO ()
 main = do
   let base = "_build"
   let getPostPaths = getDirectoryFiles "" [ "posts//*.md" ]
+  let httpServerPort = 8000
   shakeArgs shakeOptions { shakeFiles = "_shake" } $ do
     action $ do
       postPaths <- getPostPaths
@@ -161,8 +164,9 @@ main = do
         putInfo "Cleaning files in _build"
         removeFilesAfter base ["//*.html", "//*.xml"]
 
-    phony "serve" $ do
-      cmd_ "python -m http.server --directory _build"
+    phony "serve" . liftIO $ do
+      putStrLn $ "Running HTTP server on port " ++ show httpServerPort
+      run httpServerPort . WS.staticApp $ WS.defaultFileServerSettings base
 
 {- TODO:
  - * [x] show index of all posts
