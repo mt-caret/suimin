@@ -114,59 +114,62 @@ buildFeed metadata =
     (A.TextString blogName)
     (fromMaybe (T.pack "") . safeHead . fmap (PS.stringify . P.docDate) $ metadata)
 
-main :: IO ()
-main = do
+rules :: Rules ()
+rules = do
   let base = "_build"
   let getPostPaths = getDirectoryFiles "" [ "posts//*.md" ]
   let httpServerPort = 8000
-  shakeArgs shakeOptions { shakeFiles = "_shake" } $ do
-    action $ do
-      postPaths <- getPostPaths
-      need $ map (\postPath -> base </> postPath -<.> "html") postPaths
-    want . fmap (base </>) $ [ "index.html", "atom.xml" ]
 
-    getTemplate <- newCache $ runPandocIO .
-      \case
-        Nothing -> P.compileDefaultTemplate $ T.pack "html5"
-        Just path -> compileTemplate path
+  action $ do
+    postPaths <- getPostPaths
+    need $ map (\postPath -> base </> postPath -<.> "html") postPaths
+  want . fmap (base </>) $ [ "index.html", "atom.xml" ]
 
-    (base </> "posts/*.html") %> \out -> do
-      let src = dropDirectory1 $ out -<.> "md"
-      let templatePath = "templates/post.html"
-      need [ src, templatePath ]
-      template <- getTemplate (Just templatePath)
-      buildPost readerOptions (writerOptions template) src out
+  getTemplate <- newCache $ runPandocIO .
+    \case
+      Nothing -> P.compileDefaultTemplate $ T.pack "html5"
+      Just path -> compileTemplate path
 
-    (base </> "index.html") %> \out -> do
-      let templatePath = "templates/index.html"
-      postPaths <- getPostPaths
-      need $ templatePath : postPaths
-      template <- getTemplate $ Just templatePath
-      metadata <-
-        (buildIndexMetadata . filter (canPublish . snd)) <$> traverse
-          (\path -> (,) (path -<.> "html") <$> readMetadata readerOptions path) postPaths
-      let document = P.Pandoc metadata []
-      runPandocIO $ writePandoc (writerOptions template) out document
+  (base </> "posts/*.html") %> \out -> do
+    let src = dropDirectory1 $ out -<.> "md"
+    let templatePath = "templates/post.html"
+    need [ src, templatePath ]
+    template <- getTemplate (Just templatePath)
+    buildPost readerOptions (writerOptions template) src out
 
-    (base </> "atom.xml") %> \out -> do
-      postPaths <- reverse . sort <$> getPostPaths
-      need postPaths
-      metadata <-
-        filter canPublish <$>
-        traverse (readMetadata readerOptions) postPaths
-      let feed = (buildFeed metadata)
-                    { A.feedEntries = zipWith toEntry postPaths metadata
-                    , A.feedLinks = [ A.nullLink (T.pack hostName) ]
-                    }
-      liftIO . T.writeFile out . TL.toStrict . fromJust . AE.textFeed $ feed
+  (base </> "index.html") %> \out -> do
+    let templatePath = "templates/index.html"
+    postPaths <- getPostPaths
+    need $ templatePath : postPaths
+    template <- getTemplate $ Just templatePath
+    metadata <-
+      (buildIndexMetadata . filter (canPublish . snd)) <$> traverse
+        (\path -> (,) (path -<.> "html") <$> readMetadata readerOptions path) postPaths
+    let document = P.Pandoc metadata []
+    runPandocIO $ writePandoc (writerOptions template) out document
 
-    phony "clean" $ do
-        putInfo "Cleaning files in _build"
-        removeFilesAfter base ["//*.html", "//*.xml"]
+  (base </> "atom.xml") %> \out -> do
+    postPaths <- reverse . sort <$> getPostPaths
+    need postPaths
+    metadata <-
+      filter canPublish <$>
+      traverse (readMetadata readerOptions) postPaths
+    let feed = (buildFeed metadata)
+                  { A.feedEntries = zipWith toEntry postPaths metadata
+                  , A.feedLinks = [ A.nullLink (T.pack hostName) ]
+                  }
+    liftIO . T.writeFile out . TL.toStrict . fromJust . AE.textFeed $ feed
 
-    phony "serve" . liftIO $ do
-      putStrLn $ "Running HTTP server on port " ++ show httpServerPort
-      run httpServerPort . WS.staticApp $ WS.defaultFileServerSettings base
+  phony "clean" $ do
+      putInfo "Cleaning files in _build"
+      removeFilesAfter base ["//*.html", "//*.xml"]
+
+  phony "serve" . liftIO $ do
+    putStrLn $ "Running HTTP server on port " ++ show httpServerPort
+    run httpServerPort . WS.staticApp $ WS.defaultFileServerSettings base
+
+main :: IO ()
+main = shakeArgs shakeOptions { shakeFiles = "_shake" } rules
 
 {- TODO:
  - * [x] show index of all posts
