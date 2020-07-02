@@ -129,13 +129,13 @@ main = do
 
     (base </> "posts/*.html") %> \out -> do
       let src = dropDirectory1 $ out -<.> "md"
-      let templatePath = "post-template.html"
+      let templatePath = "templates/post.html"
       need [ src, templatePath ]
       template <- getTemplate (Just templatePath)
       buildPost readerOptions (writerOptions template) src out
 
     (base </> "index.html") %> \out -> do
-      let templatePath = "index-template.html"
+      let templatePath = "templates/index.html"
       postPaths <- getPostPaths
       need $ templatePath : postPaths
       template <- getTemplate $ Just templatePath
