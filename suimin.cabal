@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: acff2b7ca08c6679fc682361efe83b5c3ae5af21fa1e57fee61b84bcc0f1daa0
+-- hash: adc8ef1ab9a63b22af919b7b416f8332a593eec4ea2d48e7a34af8e271ded36b
 
 name:           suimin
 version:        0.1.0.0
@@ -28,7 +28,9 @@ executable suimin
   build-depends:
       base >=4.7 && <5
     , containers
+    , dhall
     , feed
+    , lens
     , mtl
     , pandoc
     , shake

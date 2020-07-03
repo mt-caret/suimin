@@ -1,5 +1,7 @@
 {-# Language LambdaCase #-}
 {-# Language ApplicativeDo #-}
+{-# Language TemplateHaskell #-}
+{-# Language DeriveGeneric #-}
 module Main where
 
 import Development.Shake
@@ -12,6 +14,8 @@ import Control.Monad.IO.Class
 import Control.Monad.Except (throwError)
 import Data.List
 import Data.Maybe
+import Control.Lens
+import GHC.Generics
 
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
@@ -23,6 +27,7 @@ import qualified Text.Pandoc as P
 import qualified Text.Pandoc.Shared as PS
 import qualified Network.Wai.Application.Static as WS
 import Network.Wai.Handler.Warp (run)
+import qualified Dhall as D
 
 unwrap :: (Show e, MonadFail m) => Either e a -> m a
 unwrap (Left error) = fail $ show error
@@ -116,11 +121,26 @@ buildFeed metadata =
     (A.TextString blogName)
     (fromMaybe (T.pack "") . safeHead . fmap (PS.stringify . P.docDate) $ metadata)
 
+data Config = Config
+  { _port :: Maybe D.Natural
+  } deriving (Generic, Show)
+
+$(makeLenses ''Config)
+
+instance D.FromDhall Config
+
+readConfig :: FilePath -> IO Config
+readConfig = D.input D.auto . T.pack
+
 rules :: Rules ()
 rules = do
   let base = "_build"
   let getPostPaths = getDirectoryFiles "" [ "posts//*.md" ]
-  let httpServerPort = 8000
+
+  getConfig <- newCache $ \() -> do
+    let configPath = "./config.dhall"
+    need [ configPath ]
+    liftIO $ readConfig configPath
 
   action $ do
     postPaths <- getPostPaths
@@ -166,9 +186,11 @@ rules = do
       putInfo "Cleaning files in _build"
       removeFilesAfter base ["//*.html", "//*.xml"]
 
-  phony "serve" . liftIO $ do
-    putStrLn $ "Running HTTP server on port " ++ show httpServerPort
-    run httpServerPort . WS.staticApp $ WS.defaultFileServerSettings base
+  phony "serve" $ do
+    config <- getConfig ()
+    let httpServerPort = fromMaybe 8000 . fmap fromIntegral $ config ^. port
+    liftIO . putStrLn $ "Running HTTP server on port " ++ show httpServerPort
+    liftIO .run httpServerPort . WS.staticApp $ WS.defaultFileServerSettings base
 
 main :: IO ()
 main = shakeArgs shakeOptions { shakeFiles = "_shake" } rules
