@@ -1,33 +1,32 @@
-{-# Language LambdaCase #-}
-{-# Language ApplicativeDo #-}
-{-# Language TemplateHaskell #-}
-{-# Language DeriveGeneric #-}
-module Main where
+{-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TemplateHaskell #-}
 
+module Main where
+import Control.Lens
+
+import Control.Monad
+import Control.Monad.Except (throwError)
+import Control.Monad.IO.Class
+import qualified Data.Map.Strict as M
+import Data.List
+import Data.Maybe
+import qualified Data.Text as T
+import qualified Data.Text.IO as T
+import qualified Data.Text.Lazy as TL
 import Development.Shake
 import Development.Shake.Command
 import Development.Shake.FilePath
 import Development.Shake.Util
-
-import Control.Monad
-import Control.Monad.IO.Class
-import Control.Monad.Except (throwError)
-import Data.List
-import Data.Maybe
-import Control.Lens
+import qualified Dhall as D
 import GHC.Generics
-
-import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.IO as T
-import qualified Data.Map.Strict as M
+import qualified Network.Wai.Application.Static as WS
+import Network.Wai.Handler.Warp (run)
 import qualified Text.Atom.Feed as A
 import qualified Text.Atom.Feed.Export as AE
 import qualified Text.Pandoc as P
 import qualified Text.Pandoc.Shared as PS
-import qualified Network.Wai.Application.Static as WS
-import Network.Wai.Handler.Warp (run)
-import qualified Dhall as D
 
 unwrap :: (Show e, MonadFail m) => Either e a -> m a
 unwrap (Left error) = fail $ show error
@@ -38,14 +37,16 @@ runPandocIO io =
   liftIO $ P.runIO io >>= unwrap
 
 readerOptions :: P.ReaderOptions
-readerOptions = P.def
-  { P.readerExtensions = P.pandocExtensions
-  }
+readerOptions =
+  P.def
+    { P.readerExtensions = P.pandocExtensions
+    }
 
 writerOptions :: P.Template T.Text -> P.WriterOptions
-writerOptions template = P.def
-  { P.writerTemplate = Just template
-  }
+writerOptions template =
+  P.def
+    { P.writerTemplate = Just template
+    }
 
 readMetadata :: P.ReaderOptions -> FilePath -> Action P.Meta
 readMetadata readerOptions srcPath = runPandocIO $ do
@@ -62,6 +63,13 @@ isDraft metadata =
 
 canPublish :: P.Meta -> Bool
 canPublish = not . isDraft
+
+getCategory :: P.Meta -> T.Text
+getCategory metadata =
+  case P.lookupMeta (T.pack "category") metadata of
+    Nothing -> T.pack "uncategorized"
+    Just (P.MetaString category) -> category
+    Just m -> error $ "expected MetaString for 'category' but found: " ++ (show m)
 
 writePandoc :: P.WriterOptions -> FilePath -> P.Pandoc -> P.PandocIO ()
 writePandoc writerOptions dstPath document = do
@@ -82,16 +90,19 @@ compileTemplate path = do
     Left error -> throwError $ P.PandocTemplateError (T.pack error)
     Right x -> return x
 
-buildIndexMetadata :: [ (FilePath, P.Meta) ] -> P.Meta
-buildIndexMetadata=
+buildIndexMetadata :: [(FilePath, P.Meta)] -> P.Meta
+buildIndexMetadata =
   P.Meta
     . M.insert (T.pack "title") (P.MetaString (T.pack "index"))
     . M.singleton (T.pack "posts")
-      . P.MetaList
-      . fmap (\(path, meta) ->
+    . P.MetaList
+    . fmap
+      ( \(path, meta) ->
           P.MetaMap
-          . M.insert (T.pack "href") (P.MetaString (T.pack path))
-          . P.unMeta $ meta)
+            . M.insert (T.pack "href") (P.MetaString (T.pack path))
+            . P.unMeta
+            $ meta
+      )
 
 hostName :: FilePath
 hostName = "https://mt-caret.github.io"
@@ -105,14 +116,15 @@ safeHead (x : _) = Just x
 
 toEntry :: FilePath -> P.Meta -> A.Entry
 toEntry path metadata =
-  (A.nullEntry
-    (T.pack (hostName </> path))
-    (A.TextString (PS.stringify (P.docTitle metadata)))
-    (PS.stringify (P.docDate metadata)))
-      { A.entryAuthors =
-        (\author -> A.nullPerson { A.personName = PS.stringify author } )
+  ( A.nullEntry
+      (T.pack (hostName </> path))
+      (A.TextString (PS.stringify (P.docTitle metadata)))
+      (PS.stringify (P.docDate metadata))
+  )
+    { A.entryAuthors =
+        (\author -> A.nullPerson {A.personName = PS.stringify author})
           <$> P.docAuthors metadata
-      }
+    }
 
 buildFeed :: [P.Meta] -> A.Feed
 buildFeed metadata =
@@ -122,8 +134,10 @@ buildFeed metadata =
     (fromMaybe (T.pack "") . safeHead . fmap (PS.stringify . P.docDate) $ metadata)
 
 data Config = Config
-  { _port :: Maybe D.Natural
-  } deriving (Generic, Show)
+  { _port :: Maybe D.Natural,
+    enableCategories :: Bool
+  }
+  deriving (Generic, Show)
 
 $(makeLenses ''Config)
 
@@ -135,27 +149,28 @@ readConfig = D.input D.auto . T.pack
 rules :: Rules ()
 rules = do
   let base = "_build"
-  let getPostPaths = getDirectoryFiles "" [ "posts//*.md" ]
+  let getPostPaths = getDirectoryFiles "" ["posts//*.md"]
 
   getConfig <- newCache $ \() -> do
     let configPath = "./config.dhall"
-    need [ configPath ]
+    need [configPath]
     liftIO $ readConfig configPath
 
   action $ do
     postPaths <- getPostPaths
     need $ map (\postPath -> base </> postPath -<.> "html") postPaths
-  want . fmap (base </>) $ [ "index.html", "atom.xml" ]
+  want . fmap (base </>) $ ["index.html", "atom.xml"]
 
-  getTemplate <- newCache $ runPandocIO .
-    \case
-      Nothing -> P.compileDefaultTemplate $ T.pack "html5"
-      Just path -> compileTemplate path
+  getTemplate <- newCache $
+    runPandocIO
+      . \case
+        Nothing -> P.compileDefaultTemplate $ T.pack "html5"
+        Just path -> compileTemplate path
 
   (base </> "posts/*.html") %> \out -> do
     let src = dropDirectory1 $ out -<.> "md"
     let templatePath = "templates/post.html"
-    need [ src, templatePath ]
+    need [src, templatePath]
     template <- getTemplate (Just templatePath)
     buildPost readerOptions (writerOptions template) src out
 
@@ -165,8 +180,10 @@ rules = do
     need $ templatePath : postPaths
     template <- getTemplate $ Just templatePath
     metadata <-
-      (buildIndexMetadata . filter (canPublish . snd)) <$> traverse
-        (\path -> (,) (path -<.> "html") <$> readMetadata readerOptions path) postPaths
+      (buildIndexMetadata . filter (canPublish . snd))
+        <$> traverse
+          (\path -> (,) (path -<.> "html") <$> readMetadata readerOptions path)
+          postPaths
     let document = P.Pandoc metadata []
     runPandocIO $ writePandoc (writerOptions template) out document
 
@@ -174,26 +191,27 @@ rules = do
     postPaths <- reverse . sort <$> getPostPaths
     need postPaths
     metadata <-
-      filter canPublish <$>
-      traverse (readMetadata readerOptions) postPaths
-    let feed = (buildFeed metadata)
-                  { A.feedEntries = zipWith toEntry postPaths metadata
-                  , A.feedLinks = [ A.nullLink (T.pack hostName) ]
-                  }
+      filter canPublish
+        <$> traverse (readMetadata readerOptions) postPaths
+    let feed =
+          (buildFeed metadata)
+            { A.feedEntries = zipWith toEntry postPaths metadata,
+              A.feedLinks = [A.nullLink (T.pack hostName)]
+            }
     liftIO . T.writeFile out . TL.toStrict . fromJust . AE.textFeed $ feed
 
   phony "clean" $ do
-      putInfo "Cleaning files in _build"
-      removeFilesAfter base ["//*.html", "//*.xml"]
+    putInfo "Cleaning files in _build"
+    removeFilesAfter base ["//*.html", "//*.xml"]
 
   phony "serve" $ do
     config <- getConfig ()
     let httpServerPort = fromMaybe 8000 . fmap fromIntegral $ config ^. port
     liftIO . putStrLn $ "Running HTTP server on port " ++ show httpServerPort
-    liftIO .run httpServerPort . WS.staticApp $ WS.defaultFileServerSettings base
+    liftIO . run httpServerPort . WS.staticApp $ WS.defaultFileServerSettings base
 
 main :: IO ()
-main = shakeArgs shakeOptions { shakeFiles = "_shake" } rules
+main = shakeArgs shakeOptions {shakeFiles = "_shake"} rules
 
 {- TODO:
  - * [x] show index of all posts
@@ -203,4 +221,5 @@ main = shakeArgs shakeOptions { shakeFiles = "_shake" } rules
  - * [ ] syntax highlighting?
  - * [x] drafts
  - * [ ] watch
+ - * [ ] categories
  -}
