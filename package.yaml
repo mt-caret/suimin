@@ -21,7 +21,6 @@ dependencies:
   - pandoc
   - wai-app-static
   - warp
-  - lens
   - dhall
 
 executables:

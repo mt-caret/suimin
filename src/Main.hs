@@ -4,14 +4,14 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 module Main where
-import Control.Lens
 
 import Control.Monad
 import Control.Monad.Except (throwError)
 import Control.Monad.IO.Class
-import qualified Data.Map.Strict as M
 import Data.List
+import qualified Data.Map.Strict as M
 import Data.Maybe
+import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import qualified Data.Text.Lazy as TL
@@ -64,11 +64,11 @@ isDraft metadata =
 canPublish :: P.Meta -> Bool
 canPublish = not . isDraft
 
-getCategory :: P.Meta -> T.Text
+getCategory :: P.Meta -> String
 getCategory metadata =
   case P.lookupMeta (T.pack "category") metadata of
-    Nothing -> T.pack "uncategorized"
-    Just (P.MetaString category) -> category
+    Nothing -> "uncategorized"
+    Just (P.MetaString category) -> T.unpack category
     Just m -> error $ "expected MetaString for 'category' but found: " ++ (show m)
 
 writePandoc :: P.WriterOptions -> FilePath -> P.Pandoc -> P.PandocIO ()
@@ -90,10 +90,10 @@ compileTemplate path = do
     Left error -> throwError $ P.PandocTemplateError (T.pack error)
     Right x -> return x
 
-buildIndexMetadata :: [(FilePath, P.Meta)] -> P.Meta
-buildIndexMetadata =
+buildIndexMetadata :: String -> (P.Meta -> Bool) -> [(FilePath, P.Meta)] -> P.Meta
+buildIndexMetadata title predicate =
   P.Meta
-    . M.insert (T.pack "title") (P.MetaString (T.pack "index"))
+    . M.insert (T.pack "title") (P.MetaString (T.pack title))
     . M.singleton (T.pack "posts")
     . P.MetaList
     . fmap
@@ -103,6 +103,7 @@ buildIndexMetadata =
             . P.unMeta
             $ meta
       )
+    . filter (predicate . snd)
 
 hostName :: FilePath
 hostName = "https://mt-caret.github.io"
@@ -134,17 +135,18 @@ buildFeed metadata =
     (fromMaybe (T.pack "") . safeHead . fmap (PS.stringify . P.docDate) $ metadata)
 
 data Config = Config
-  { _port :: Maybe D.Natural,
+  { port :: Maybe D.Natural,
     enableCategories :: Bool
   }
   deriving (Generic, Show)
-
-$(makeLenses ''Config)
 
 instance D.FromDhall Config
 
 readConfig :: FilePath -> IO Config
 readConfig = D.input D.auto . T.pack
+
+uniq :: Ord a => [a] -> [a]
+uniq = S.toList . S.fromList
 
 rules :: Rules ()
 rules = do
@@ -156,9 +158,17 @@ rules = do
     need [configPath]
     liftIO $ readConfig configPath
 
+  action $ getPostPaths >>= need . map (\p -> base </> p -<.> "html")
+
   action $ do
-    postPaths <- getPostPaths
-    need $ map (\postPath -> base </> postPath -<.> "html") postPaths
+    config <- getConfig ()
+    when (enableCategories config) $ do
+      postPaths <- getPostPaths
+      categories <-
+        uniq . fmap getCategory
+          <$> traverse (readMetadata readerOptions) postPaths
+      need $ map (\c -> base </> "category" </> c <.> "html") categories
+
   want . fmap (base </>) $ ["index.html", "atom.xml"]
 
   getTemplate <- newCache $
@@ -180,7 +190,21 @@ rules = do
     need $ templatePath : postPaths
     template <- getTemplate $ Just templatePath
     metadata <-
-      (buildIndexMetadata . filter (canPublish . snd))
+      (buildIndexMetadata "index" (const True) . filter (canPublish . snd))
+        <$> traverse
+          (\path -> (,) (path -<.> "html") <$> readMetadata readerOptions path)
+          postPaths
+    let document = P.Pandoc metadata []
+    runPandocIO $ writePandoc (writerOptions template) out document
+
+  (base </> "category/*.html") %> \out -> do
+    let templatePath = "templates/index.html"
+    let category = takeBaseName out
+    postPaths <- getPostPaths
+    need $ templatePath : postPaths
+    template <- getTemplate $ Just templatePath
+    metadata <-
+      (buildIndexMetadata category ((== category) . getCategory) . filter (canPublish . snd))
         <$> traverse
           (\path -> (,) (path -<.> "html") <$> readMetadata readerOptions path)
           postPaths
@@ -206,7 +230,7 @@ rules = do
 
   phony "serve" $ do
     config <- getConfig ()
-    let httpServerPort = fromMaybe 8000 . fmap fromIntegral $ config ^. port
+    let httpServerPort = fromMaybe 8000 . fmap fromIntegral $ port config
     liftIO . putStrLn $ "Running HTTP server on port " ++ show httpServerPort
     liftIO . run httpServerPort . WS.staticApp $ WS.defaultFileServerSettings base
 
@@ -221,5 +245,5 @@ main = shakeArgs shakeOptions {shakeFiles = "_shake"} rules
  - * [ ] syntax highlighting?
  - * [x] drafts
  - * [ ] watch
- - * [ ] categories
+ - * [x] categories
  -}
