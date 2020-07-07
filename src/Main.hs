@@ -206,7 +206,7 @@ rules = do
     metadata <-
       (buildIndexMetadata category ((== category) . getCategory) . filter (canPublish . snd))
         <$> traverse
-          (\path -> (,) (path -<.> "html") <$> readMetadata readerOptions path)
+          (\path -> (,) ("../" </> path -<.> "html") <$> readMetadata readerOptions path)
           postPaths
     let document = P.Pandoc metadata []
     runPandocIO $ writePandoc (writerOptions template) out document
