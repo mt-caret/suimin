@@ -47,6 +47,11 @@ $endfor$
 $if(date)$
 <p class="date">$date$</p>
 $endif$
+$if(category)$
+<p class="category">category:<a href="../category/$category$.html">$category$</a></p>
+$else$
+<p class="category">category: <a href="../category/uncategorized.html">uncategorized</a></p>
+$endif$
 </header>
 $endif$
 $if(toc)$

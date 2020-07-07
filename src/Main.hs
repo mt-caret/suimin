@@ -246,4 +246,5 @@ main = shakeArgs shakeOptions {shakeFiles = "_shake"} rules
  - * [x] drafts
  - * [ ] watch
  - * [x] categories
+ - * [ ] tags
  -}
