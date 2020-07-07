@@ -72,6 +72,17 @@ getCategory metadata =
     Just (P.MetaInlines inlines) -> T.unpack $ PS.stringify inlines
     Just m -> error $ "expected MetaString for 'category' but found: " ++ (show m)
 
+extractTag :: P.MetaValue -> String
+extractTag (P.MetaString tag) = T.unpack tag
+extractTag (P.MetaInlines inlines) = T.unpack $ PS.stringify inlines
+
+getTags :: P.Meta -> [String]
+getTags metadata =
+  case P.lookupMeta (T.pack "tags") metadata of
+    Nothing -> []
+    Just (P.MetaList tagMetavalues) -> extractTag <$> tagMetavalues
+    Just m -> error $ "expected MetaList for 'tags' but found: " ++ (show m)
+
 writePandoc :: P.WriterOptions -> FilePath -> P.Pandoc -> P.PandocIO ()
 writePandoc writerOptions dstPath document = do
   html <- P.writeHtml5String writerOptions document
@@ -137,7 +148,8 @@ buildFeed metadata =
 
 data Config = Config
   { port :: Maybe D.Natural,
-    enableCategories :: Bool
+    enableCategories :: Bool,
+    enableTags :: Bool
   }
   deriving (Generic, Show)
 
@@ -166,9 +178,15 @@ rules = do
     when (enableCategories config) $ do
       postPaths <- getPostPaths
       categories <-
-        uniq . fmap getCategory
+        uniq . map getCategory
           <$> traverse (readMetadata readerOptions) postPaths
       need $ map (\c -> base </> "category" </> c <.> "html") categories
+    when (enableTags config) $ do
+      postPaths <- getPostPaths
+      categories <-
+        uniq . concat . map getTags
+          <$> traverse (readMetadata readerOptions) postPaths
+      need $ map (\c -> base </> "tag" </> c <.> "html") categories
 
   want . fmap (base </>) $ ["index.html", "atom.xml"]
 
@@ -212,6 +230,20 @@ rules = do
     let document = P.Pandoc metadata []
     runPandocIO $ writePandoc (writerOptions template) out document
 
+  (base </> "tag/*.html") %> \out -> do
+    let templatePath = "templates/index.html"
+    let tag = takeBaseName out
+    postPaths <- getPostPaths
+    need $ templatePath : postPaths
+    template <- getTemplate $ Just templatePath
+    metadata <-
+      (buildIndexMetadata tag (any (== tag) . getTags) . filter (canPublish . snd))
+        <$> traverse
+          (\path -> (,) ("../" </> path -<.> "html") <$> readMetadata readerOptions path)
+          postPaths
+    let document = P.Pandoc metadata []
+    runPandocIO $ writePandoc (writerOptions template) out document
+
   (base </> "atom.xml") %> \out -> do
     postPaths <- reverse . sort <$> getPostPaths
     need postPaths
@@ -247,5 +279,5 @@ main = shakeArgs shakeOptions {shakeFiles = "_shake"} rules
  - * [x] drafts
  - * [ ] watch
  - * [x] categories
- - * [ ] tags
+ - * [x] tags
  -}

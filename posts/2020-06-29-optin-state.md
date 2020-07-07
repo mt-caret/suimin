@@ -2,6 +2,8 @@
 title: Encypted Btrfs Root with Opt-in State on NixOS
 date: 2020-06-29
 category: tech
+tags:
+- NixOS
 ---
 
 [grahamc's "Erase your darlings" blog post](https://grahamc.com/blog/erase-your-darlings)
