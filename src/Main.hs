@@ -189,25 +189,15 @@ rules = do
       categories <-
         uniq . map getCategory
           <$> traverse (readMetadata readerOptions) postPaths
-      need $
-        categories
-          >>= ( \c ->
-                  [ base </> "category" </> c <.> "html",
-                    base </> "category" </> c <.> "xml"
-                  ]
-              )
+      let bp c = base </> "category" </> c
+      need $ categories >>= (\c -> [bp c <.> "html", bp c <.> "xml"])
     when (enableTags config) $ do
       postPaths <- getPostPaths
-      categories <-
+      tags <-
         uniq . concat . map getTags
           <$> traverse (readMetadata readerOptions) postPaths
-      need $
-        categories
-          >>= ( \c ->
-                  [ base </> "tag" </> c <.> "html",
-                    base </> "tag" </> c <.> "xml"
-                  ]
-              )
+      let bp t = base </> "tag" </> t
+      need $ tags >>= (\t -> [bp t <.> "html", bp t <.> "xml"])
 
   want . fmap (base </>) $ ["index.html", "atom.xml"]
 
