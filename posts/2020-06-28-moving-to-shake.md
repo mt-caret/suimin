@@ -1,6 +1,7 @@
 ---
 title: Writing a Static Site Generator in Shake
 date: 2020-06-28
+category: tech
 ---
 
 Today I'm working on porting [nippo](https://github.com/mt-caret/nippo/) to

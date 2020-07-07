@@ -69,6 +69,7 @@ getCategory metadata =
   case P.lookupMeta (T.pack "category") metadata of
     Nothing -> "uncategorized"
     Just (P.MetaString category) -> T.unpack category
+    Just (P.MetaInlines inlines) -> T.unpack $ PS.stringify inlines
     Just m -> error $ "expected MetaString for 'category' but found: " ++ (show m)
 
 writePandoc :: P.WriterOptions -> FilePath -> P.Pandoc -> P.PandocIO ()
