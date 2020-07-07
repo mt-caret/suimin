@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 7074f8f8d134d93718965f16488bd8cdf6717f7367023ea5f04d8f54b3bcd6f8
+-- hash: 9d439654c57af6b06cdc423c4ce1ef8245cfa098965a8901597a792fd4d263f4
 
 name:           suimin
 version:        0.1.0.0
@@ -32,6 +32,7 @@ executable suimin
     , feed
     , mtl
     , pandoc
+    , pandoc-types
     , shake
     , text
     , wai-app-static

@@ -19,6 +19,7 @@ dependencies:
   - mtl
   - feed
   - pandoc
+  - pandoc-types
   - wai-app-static
   - warp
   - dhall

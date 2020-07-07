@@ -27,6 +27,7 @@ import qualified Text.Atom.Feed as A
 import qualified Text.Atom.Feed.Export as AE
 import qualified Text.Pandoc as P
 import qualified Text.Pandoc.Shared as PS
+import qualified Text.Pandoc.Walk as PW
 
 unwrap :: (Show e, MonadFail m) => Either e a -> m a
 unwrap (Left error) = fail $ show error
@@ -88,12 +89,25 @@ writePandoc writerOptions dstPath document = do
   html <- P.writeHtml5String writerOptions document
   liftIO $ T.writeFile dstPath html
 
-buildPost :: P.ReaderOptions -> P.WriterOptions -> FilePath -> FilePath -> Action ()
-buildPost readerOptions writerOptions srcPath dstPath = runPandocIO $ do
+expandLinks :: P.Pandoc -> Action P.Pandoc
+expandLinks = PW.walkM expandLinkInline
+  where
+    expandLinkInline :: P.Inline -> Action P.Inline
+    expandLinkInline = \case
+      (P.Link alt inlines (url, title)) | T.null url -> do
+        let slug = T.unpack $ PS.stringify inlines
+        let path = "posts" </> slug <.> "md"
+        newTitle <- getTitle <$> readMetadata readerOptions path
+        return $ P.Link alt [P.Str newTitle] (T.pack ("." </> slug <.> "html"), title)
+      x -> return x
+
+buildPost :: P.ReaderOptions -> P.WriterOptions -> (P.Pandoc -> Action P.Pandoc) -> FilePath -> FilePath -> Action ()
+buildPost readerOptions writerOptions walk srcPath dstPath = do
   content <- liftIO $ T.readFile srcPath
-  document@(P.Pandoc metadata _) <- P.readMarkdown readerOptions content
+  document@(P.Pandoc metadata _) <-
+    runPandocIO (P.readMarkdown readerOptions content) >>= walk
   liftIO $ print metadata
-  writePandoc writerOptions dstPath document
+  runPandocIO $ writePandoc writerOptions dstPath document
 
 compileTemplate :: P.PandocMonad m => FilePath -> m (P.Template T.Text)
 compileTemplate path = do
@@ -121,11 +135,14 @@ safeHead :: [a] -> Maybe a
 safeHead [] = Nothing
 safeHead (x : _) = Just x
 
+getTitle :: P.Meta -> T.Text
+getTitle = PS.stringify . P.docTitle
+
 toEntry :: FilePath -> P.Meta -> A.Entry
 toEntry fullPath metadata =
   ( A.nullEntry
       (T.pack fullPath)
-      (A.TextString (PS.stringify (P.docTitle metadata)))
+      (A.TextString (getTitle metadata))
       (PS.stringify (P.docDate metadata))
   )
     { A.entryAuthors =
@@ -173,7 +190,9 @@ uniq = S.toList . S.fromList
 rules :: Rules ()
 rules = do
   let base = "_build"
-  let getPostPaths = getDirectoryFiles "" ["posts//*.md"]
+  -- TODO: this sorts correctly because we put the date first in the filename,
+  -- possibly should sort by date in metadata?
+  let getPostPaths = reverse . sort <$> getDirectoryFiles "" ["posts//*.md"]
 
   getConfig <- newCache $ \() -> do
     let configPath = "./config.dhall"
@@ -209,16 +228,14 @@ rules = do
 
   (base </> "posts/*.html") %> \out -> do
     let src = dropDirectory1 $ out -<.> "md"
-    let templatePath = "templates/post.html"
-    need [src, templatePath]
-    template <- getTemplate (Just templatePath)
-    buildPost readerOptions (writerOptions template) src out
+    need [src]
+    template <- getTemplate $ Just "templates/post.html"
+    buildPost readerOptions (writerOptions template) expandLinks src out
 
   (base </> "index.html") %> \out -> do
     let templatePath = "templates/index.html"
-    postPaths <- getPostPaths
-    need $ templatePath : postPaths
     template <- getTemplate $ Just templatePath
+    postPaths <- getPostPaths
     metadata <-
       (buildIndexMetadata "index" (const True) . filter (canPublish . snd))
         <$> traverse
@@ -228,11 +245,9 @@ rules = do
     runPandocIO $ writePandoc (writerOptions template) out document
 
   (base </> "category/*.html") %> \out -> do
-    let templatePath = "templates/index.html"
     let category = takeBaseName out
+    template <- getTemplate $ Just "templates/index.html"
     postPaths <- getPostPaths
-    need $ templatePath : postPaths
-    template <- getTemplate $ Just templatePath
     metadata <-
       (buildIndexMetadata category ((== category) . getCategory) . filter (canPublish . snd))
         <$> traverse
@@ -243,8 +258,7 @@ rules = do
 
   (base </> "category/*.xml") %> \out -> do
     let category = takeBaseName out
-    postPaths <- reverse . sort <$> getPostPaths
-    need postPaths
+    postPaths <- getPostPaths
     metadata <-
       filter (\m -> canPublish m && category == getCategory m)
         <$> traverse (readMetadata readerOptions) postPaths
@@ -253,11 +267,9 @@ rules = do
     writeFeed out feed
 
   (base </> "tag/*.html") %> \out -> do
-    let templatePath = "templates/index.html"
     let tag = takeBaseName out
+    template <- getTemplate $ Just "templates/index.html"
     postPaths <- getPostPaths
-    need $ templatePath : postPaths
-    template <- getTemplate $ Just templatePath
     metadata <-
       (buildIndexMetadata tag (any (== tag) . getTags) . filter (canPublish . snd))
         <$> traverse
@@ -268,8 +280,7 @@ rules = do
 
   (base </> "tag/*.xml") %> \out -> do
     let tag = takeBaseName out
-    postPaths <- reverse . sort <$> getPostPaths
-    need postPaths
+    postPaths <- getPostPaths
     metadata <-
       filter (\m -> canPublish m && any (== tag) (getTags m))
         <$> traverse (readMetadata readerOptions) postPaths
@@ -278,8 +289,7 @@ rules = do
     writeFeed out feed
 
   (base </> "atom.xml") %> \out -> do
-    postPaths <- reverse . sort <$> getPostPaths
-    need postPaths
+    postPaths <- getPostPaths
     metadata <-
       filter canPublish
         <$> traverse (readMetadata readerOptions) postPaths
