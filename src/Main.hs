@@ -117,20 +117,14 @@ buildIndexMetadata title predicate =
       )
     . filter (predicate . snd)
 
-hostName :: FilePath
-hostName = "https://mt-caret.github.io"
-
-blogName :: T.Text
-blogName = T.pack "blog"
-
 safeHead :: [a] -> Maybe a
 safeHead [] = Nothing
 safeHead (x : _) = Just x
 
 toEntry :: FilePath -> P.Meta -> A.Entry
-toEntry path metadata =
+toEntry fullPath metadata =
   ( A.nullEntry
-      (T.pack (hostName </> path))
+      (T.pack fullPath)
       (A.TextString (PS.stringify (P.docTitle metadata)))
       (PS.stringify (P.docDate metadata))
   )
@@ -139,17 +133,29 @@ toEntry path metadata =
           <$> P.docAuthors metadata
     }
 
-buildFeed :: [P.Meta] -> A.Feed
-buildFeed metadata =
-  A.nullFeed
-    (T.pack (hostName </> "atom.xml"))
-    (A.TextString blogName)
-    (fromMaybe (T.pack "") . safeHead . fmap (PS.stringify . P.docDate) $ metadata)
+buildFeed :: Config -> FilePath -> [P.Meta] -> [FilePath] -> A.Feed
+buildFeed config atomPath metadata postPaths =
+  ( A.nullFeed
+      (T.pack (blogRoot config </> atomPath))
+      (A.TextString (T.pack (blogName config)))
+      (fromMaybe (T.pack "") . safeHead . fmap (PS.stringify . P.docDate) $ metadata)
+  )
+    { A.feedEntries = zipWith toEntry fullPostPaths metadata,
+      A.feedLinks = [A.nullLink (T.pack (blogRoot config))]
+    }
+  where
+    fullPostPaths = map (\p -> blogRoot config </> p) postPaths
+
+writeFeed :: MonadIO m => FilePath -> A.Feed -> m ()
+writeFeed path = liftIO . T.writeFile path . TL.toStrict . fromJust . AE.textFeed
 
 data Config = Config
   { port :: Maybe D.Natural,
     enableCategories :: Bool,
-    enableTags :: Bool
+    enableTags :: Bool,
+    blogName :: String,
+    hostName :: String,
+    relativePath :: String
   }
   deriving (Generic, Show)
 
@@ -157,6 +163,9 @@ instance D.FromDhall Config
 
 readConfig :: FilePath -> IO Config
 readConfig = D.input D.auto . T.pack
+
+blogRoot :: Config -> FilePath
+blogRoot config = hostName config </> relativePath config
 
 uniq :: Ord a => [a] -> [a]
 uniq = S.toList . S.fromList
@@ -180,13 +189,25 @@ rules = do
       categories <-
         uniq . map getCategory
           <$> traverse (readMetadata readerOptions) postPaths
-      need $ map (\c -> base </> "category" </> c <.> "html") categories
+      need $
+        categories
+          >>= ( \c ->
+                  [ base </> "category" </> c <.> "html",
+                    base </> "category" </> c <.> "xml"
+                  ]
+              )
     when (enableTags config) $ do
       postPaths <- getPostPaths
       categories <-
         uniq . concat . map getTags
           <$> traverse (readMetadata readerOptions) postPaths
-      need $ map (\c -> base </> "tag" </> c <.> "html") categories
+      need $
+        categories
+          >>= ( \c ->
+                  [ base </> "tag" </> c <.> "html",
+                    base </> "tag" </> c <.> "xml"
+                  ]
+              )
 
   want . fmap (base </>) $ ["index.html", "atom.xml"]
 
@@ -230,6 +251,17 @@ rules = do
     let document = P.Pandoc metadata []
     runPandocIO $ writePandoc (writerOptions template) out document
 
+  (base </> "category/*.xml") %> \out -> do
+    let category = takeBaseName out
+    postPaths <- reverse . sort <$> getPostPaths
+    need postPaths
+    metadata <-
+      filter (\m -> canPublish m && category == getCategory m)
+        <$> traverse (readMetadata readerOptions) postPaths
+    config <- getConfig ()
+    let feed = buildFeed config ("category" </> category <.> "xml") metadata postPaths
+    writeFeed out feed
+
   (base </> "tag/*.html") %> \out -> do
     let templatePath = "templates/index.html"
     let tag = takeBaseName out
@@ -244,18 +276,26 @@ rules = do
     let document = P.Pandoc metadata []
     runPandocIO $ writePandoc (writerOptions template) out document
 
+  (base </> "tag/*.xml") %> \out -> do
+    let tag = takeBaseName out
+    postPaths <- reverse . sort <$> getPostPaths
+    need postPaths
+    metadata <-
+      filter (\m -> canPublish m && any (== tag) (getTags m))
+        <$> traverse (readMetadata readerOptions) postPaths
+    config <- getConfig ()
+    let feed = buildFeed config ("tag" </> tag <.> "xml") metadata postPaths
+    writeFeed out feed
+
   (base </> "atom.xml") %> \out -> do
     postPaths <- reverse . sort <$> getPostPaths
     need postPaths
     metadata <-
       filter canPublish
         <$> traverse (readMetadata readerOptions) postPaths
-    let feed =
-          (buildFeed metadata)
-            { A.feedEntries = zipWith toEntry postPaths metadata,
-              A.feedLinks = [A.nullLink (T.pack hostName)]
-            }
-    liftIO . T.writeFile out . TL.toStrict . fromJust . AE.textFeed $ feed
+    config <- getConfig ()
+    let feed = buildFeed config ("atom.xml") metadata postPaths
+    writeFeed out feed
 
   phony "clean" $ do
     putInfo "Cleaning files in _build"
