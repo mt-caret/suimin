@@ -2,12 +2,14 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TupleSections #-}
 
 module Main where
 
 import Control.Monad
 import Control.Monad.Except (throwError)
 import Control.Monad.IO.Class
+import qualified Control.Monad.Writer.Strict as W
 import Data.List
 import qualified Data.Map.Strict as M
 import Data.Maybe
@@ -49,11 +51,19 @@ writerOptions template =
     { P.writerTemplate = Just template
     }
 
-readMetadata :: P.ReaderOptions -> FilePath -> Action P.Meta
-readMetadata readerOptions srcPath = runPandocIO $ do
+readDoc :: P.ReaderOptions -> FilePath -> Action P.Pandoc
+readDoc readerOptions srcPath = runPandocIO $ do
   content <- liftIO $ T.readFile srcPath
-  (P.Pandoc metadata _) <- P.readMarkdown readerOptions content
-  return metadata
+  P.readMarkdown readerOptions content
+
+getMetadata :: P.Pandoc -> P.Meta
+getMetadata (P.Pandoc metadata _) = metadata
+
+(.*) :: (c -> d) -> (a -> b -> c) -> a -> b -> d
+(.*) = (.) . (.)
+
+readMetadata :: P.ReaderOptions -> FilePath -> Action P.Meta
+readMetadata = fmap getMetadata .* readDoc
 
 isDraft :: P.Meta -> Bool
 isDraft metadata =
@@ -89,25 +99,56 @@ writePandoc writerOptions dstPath document = do
   html <- P.writeHtml5String writerOptions document
   liftIO $ T.writeFile dstPath html
 
-expandLinks :: P.Pandoc -> Action P.Pandoc
-expandLinks = PW.walkM expandLinkInline
+type AccumLinks a = W.WriterT [String] Action a
+
+liftAction :: Action a -> AccumLinks a
+liftAction = W.WriterT . fmap (,mempty)
+
+processLinks :: P.Pandoc -> AccumLinks P.Pandoc
+processLinks = PW.walkM expandLinkInline
   where
-    expandLinkInline :: P.Inline -> Action P.Inline
+    expandLinkInline :: P.Inline -> AccumLinks P.Inline
     expandLinkInline = \case
       (P.Link alt inlines (url, title)) | T.null url -> do
         let slug = T.unpack $ PS.stringify inlines
         let path = "posts" </> slug <.> "md"
-        newTitle <- getTitle <$> readMetadata readerOptions path
-        return $ P.Link alt [P.Str newTitle] (T.pack ("." </> slug <.> "html"), title)
+        let link = T.pack ("." </> slug <.> "html")
+        W.tell [slug]
+        newTitle <- liftAction $ getTitle <$> readMetadata readerOptions path
+        return $ P.Link alt [P.Str newTitle] (link, title)
       x -> return x
 
-buildPost :: P.ReaderOptions -> P.WriterOptions -> (P.Pandoc -> Action P.Pandoc) -> FilePath -> FilePath -> Action ()
-buildPost readerOptions writerOptions walk srcPath dstPath = do
-  content <- liftIO $ T.readFile srcPath
-  document@(P.Pandoc metadata _) <-
-    runPandocIO (P.readMarkdown readerOptions content) >>= walk
-  liftIO $ print metadata
-  runPandocIO $ writePandoc writerOptions dstPath document
+expandLinks :: P.Pandoc -> Action P.Pandoc
+expandLinks = fmap fst . W.runWriterT . processLinks
+
+extractSlugs :: P.ReaderOptions -> FilePath -> Action [String]
+extractSlugs readerOptions srcPath =
+  readDoc readerOptions srcPath >>= extract
+  where
+    extract :: P.Pandoc -> Action [String]
+    extract = fmap (uniqDesc . snd) . W.runWriterT . processLinks
+
+populateBacklinks :: [T.Text] -> P.Meta -> P.Meta
+populateBacklinks [] = id
+populateBacklinks backlinks =
+  P.Meta . update . P.unMeta
+  where
+    update =
+      M.insert (T.pack "backlinks") (P.MetaList $ map P.MetaString backlinks)
+
+buildPost ::
+  P.ReaderOptions ->
+  P.WriterOptions ->
+  [T.Text] ->
+  (P.Pandoc -> Action P.Pandoc) ->
+  FilePath ->
+  FilePath ->
+  Action ()
+buildPost readerOptions writerOptions backlinks walk srcPath dstPath = do
+  (P.Pandoc metadata blocks) <- readDoc readerOptions srcPath >>= walk
+  let newMetadata = populateBacklinks backlinks metadata
+  liftIO $ print newMetadata
+  runPandocIO $ writePandoc writerOptions dstPath (P.Pandoc newMetadata blocks)
 
 compileTemplate :: P.PandocMonad m => FilePath -> m (P.Template T.Text)
 compileTemplate path = do
@@ -184,8 +225,14 @@ readConfig = D.input D.auto . T.pack
 blogRoot :: Config -> FilePath
 blogRoot config = hostName config </> relativePath config
 
-uniq :: Ord a => [a] -> [a]
-uniq = S.toList . S.fromList
+uniqAsc :: Ord a => [a] -> [a]
+uniqAsc = S.toAscList . S.fromList
+
+uniqDesc :: Ord a => [a] -> [a]
+uniqDesc = S.toDescList . S.fromList
+
+fromListMonoid :: (Ord k, Monoid m) => [(k, m)] -> M.Map k m
+fromListMonoid = M.fromListWith mappend
 
 rules :: Rules ()
 rules = do
@@ -206,14 +253,14 @@ rules = do
     when (enableCategories config) $ do
       postPaths <- getPostPaths
       categories <-
-        uniq . map getCategory
+        uniqAsc . map getCategory
           <$> traverse (readMetadata readerOptions) postPaths
       let bp c = base </> "category" </> c
       need $ categories >>= (\c -> [bp c <.> "html", bp c <.> "xml"])
     when (enableTags config) $ do
       postPaths <- getPostPaths
       tags <-
-        uniq . concat . map getTags
+        uniqAsc . concat . map getTags
           <$> traverse (readMetadata readerOptions) postPaths
       let bp t = base </> "tag" </> t
       need $ tags >>= (\t -> [bp t <.> "html", bp t <.> "xml"])
@@ -226,11 +273,29 @@ rules = do
         Nothing -> P.compileDefaultTemplate $ T.pack "html5"
         Just path -> compileTemplate path
 
+  getBacklinks <- newCache $ \() -> do
+    postPaths <- getPostPaths
+    let convertToBacklinks :: [(String, [String])] -> [(String, [T.Text])]
+        convertToBacklinks mappings =
+          fmap uniqAsc
+            <$> mappings >>= \(path, slugs) ->
+              map (\slug -> (slug, [T.pack (takeBaseName path)])) slugs
+    backlinks <-
+      fmap (M.fromList . convertToBacklinks)
+        . filterM (fmap canPublish . readMetadata readerOptions . fst)
+        =<< traverse
+          (\path -> (path,) <$> extractSlugs readerOptions path)
+          postPaths
+    liftIO $ print backlinks
+    return backlinks
+
   (base </> "posts/*.html") %> \out -> do
     let src = dropDirectory1 $ out -<.> "md"
     need [src]
     template <- getTemplate $ Just "templates/post.html"
-    buildPost readerOptions (writerOptions template) expandLinks src out
+    backlinks <- fromMaybe [] . M.lookup (takeBaseName out) <$> getBacklinks ()
+    liftIO . print $ out ++ " -> " ++ show backlinks
+    buildPost readerOptions (writerOptions template) backlinks expandLinks src out
 
   (base </> "index.html") %> \out -> do
     let templatePath = "templates/index.html"
