@@ -216,6 +216,7 @@ data Config = Config
   { port :: Maybe D.Natural,
     enableCategories :: Bool,
     enableTags :: Bool,
+    enableBacklinks :: Bool,
     blogName :: String,
     hostName :: String,
     relativePath :: String
@@ -295,7 +296,11 @@ rules = do
     let src = dropDirectory1 $ out -<.> "md"
     need [src]
     template <- getTemplate $ Just "templates/post.html"
-    backlinks <- fromMaybe [] . M.lookup (takeBaseName out) <$> getBacklinks ()
+    config <- getConfig ()
+    backlinks <-
+      if enableBacklinks config
+        then fromMaybe [] . M.lookup (takeBaseName out) <$> getBacklinks ()
+        else return []
     liftIO . print $ out ++ " -> " ++ show backlinks
     buildPost readerOptions (writerOptions template) backlinks expandLinks src out
 
