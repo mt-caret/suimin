@@ -56,14 +56,14 @@ readDoc readerOptions srcPath = runPandocIO $ do
   content <- liftIO $ T.readFile srcPath
   P.readMarkdown readerOptions content
 
-getMetadata :: P.Pandoc -> P.Meta
-getMetadata (P.Pandoc metadata _) = metadata
+documentToMetadata :: P.Pandoc -> P.Meta
+documentToMetadata (P.Pandoc metadata _) = metadata
 
 (.*) :: (c -> d) -> (a -> b -> c) -> a -> b -> d
 (.*) = (.) . (.)
 
 readMetadata :: P.ReaderOptions -> FilePath -> Action P.Meta
-readMetadata = fmap getMetadata .* readDoc
+readMetadata = fmap documentToMetadata .* readDoc
 
 isDraft :: P.Meta -> Bool
 isDraft metadata =
@@ -248,20 +248,20 @@ rules = do
 
   action $ getPostPaths >>= need . map (\p -> base </> p -<.> "html")
 
+  getMetadata <- newCache $ readMetadata readerOptions
+  let getMetadatas :: [FilePath] -> Action [P.Meta]
+      getMetadatas = traverse getMetadata
+
   action $ do
     config <- getConfig ()
     when (enableCategories config) $ do
       postPaths <- getPostPaths
-      categories <-
-        uniqAsc . map getCategory
-          <$> traverse (readMetadata readerOptions) postPaths
+      categories <- uniqAsc . map getCategory <$> getMetadatas postPaths
       let bp c = base </> "category" </> c
       need $ categories >>= (\c -> [bp c <.> "html", bp c <.> "xml"])
     when (enableTags config) $ do
       postPaths <- getPostPaths
-      tags <-
-        uniqAsc . concat . map getTags
-          <$> traverse (readMetadata readerOptions) postPaths
+      tags <- uniqAsc . concat . map getTags <$> getMetadatas postPaths
       let bp t = base </> "tag" </> t
       need $ tags >>= (\t -> [bp t <.> "html", bp t <.> "xml"])
 
@@ -275,14 +275,14 @@ rules = do
 
   getBacklinks <- newCache $ \() -> do
     postPaths <- getPostPaths
-    let convertToBacklinks :: [(String, [String])] -> [(String, [T.Text])]
+    let convertToBacklinks :: Ord a => [(b, [a])] -> [(a, [b])]
         convertToBacklinks mappings =
           fmap uniqAsc
             <$> mappings >>= \(path, slugs) ->
-              map (\slug -> (slug, [T.pack (takeBaseName path)])) slugs
+              map (\slug -> (slug, [path])) slugs
     backlinks <-
       fmap (M.fromList . convertToBacklinks)
-        . filterM (fmap canPublish . readMetadata readerOptions . fst)
+        . filterM (fmap canPublish . getMetadata . fst)
         =<< traverse
           (\path -> (path,) <$> extractSlugs readerOptions path)
           postPaths
@@ -293,7 +293,7 @@ rules = do
     let src = dropDirectory1 $ out -<.> "md"
     need [src]
     template <- getTemplate $ Just "templates/post.html"
-    backlinks <- fromMaybe [] . M.lookup (takeBaseName out) <$> getBacklinks ()
+    backlinks <- map T.pack . fromMaybe [] . M.lookup (takeBaseName out) <$> getBacklinks ()
     liftIO . print $ out ++ " -> " ++ show backlinks
     buildPost readerOptions (writerOptions template) backlinks expandLinks src out
 
@@ -301,11 +301,11 @@ rules = do
     let templatePath = "templates/index.html"
     template <- getTemplate $ Just templatePath
     postPaths <- getPostPaths
+    let relPaths = map (\path -> path -<.> "html") postPaths
+    let buildIndex = buildIndexMetadata "index" (const True)
     metadata <-
-      (buildIndexMetadata "index" (const True) . filter (canPublish . snd))
-        <$> traverse
-          (\path -> (,) (path -<.> "html") <$> readMetadata readerOptions path)
-          postPaths
+      buildIndex . filter (canPublish . snd) . zip relPaths
+        <$> getMetadatas postPaths
     let document = P.Pandoc metadata []
     runPandocIO $ writePandoc (writerOptions template) out document
 
@@ -313,11 +313,11 @@ rules = do
     let category = takeBaseName out
     template <- getTemplate $ Just "templates/index.html"
     postPaths <- getPostPaths
+    let relPaths = map (\path -> "../" </> path -<.> "html") postPaths
+    let buildIndex = buildIndexMetadata category ((== category) . getCategory)
     metadata <-
-      (buildIndexMetadata category ((== category) . getCategory) . filter (canPublish . snd))
-        <$> traverse
-          (\path -> (,) ("../" </> path -<.> "html") <$> readMetadata readerOptions path)
-          postPaths
+      buildIndex . filter (canPublish . snd) . zip relPaths
+        <$> getMetadatas postPaths
     let document = P.Pandoc metadata []
     runPandocIO $ writePandoc (writerOptions template) out document
 
@@ -326,7 +326,7 @@ rules = do
     postPaths <- getPostPaths
     metadata <-
       filter (\m -> canPublish m && category == getCategory m)
-        <$> traverse (readMetadata readerOptions) postPaths
+        <$> getMetadatas postPaths
     config <- getConfig ()
     let feed = buildFeed config ("category" </> category <.> "xml") metadata postPaths
     writeFeed out feed
@@ -335,11 +335,11 @@ rules = do
     let tag = takeBaseName out
     template <- getTemplate $ Just "templates/index.html"
     postPaths <- getPostPaths
+    let relPaths = map (\path -> "../" </> path -<.> "html") postPaths
+    let buildIndex = buildIndexMetadata tag (any (== tag) . getTags)
     metadata <-
-      (buildIndexMetadata tag (any (== tag) . getTags) . filter (canPublish . snd))
-        <$> traverse
-          (\path -> (,) ("../" </> path -<.> "html") <$> readMetadata readerOptions path)
-          postPaths
+      buildIndex . filter (canPublish . snd) . zip relPaths
+        <$> getMetadatas postPaths
     let document = P.Pandoc metadata []
     runPandocIO $ writePandoc (writerOptions template) out document
 
@@ -348,16 +348,14 @@ rules = do
     postPaths <- getPostPaths
     metadata <-
       filter (\m -> canPublish m && any (== tag) (getTags m))
-        <$> traverse (readMetadata readerOptions) postPaths
+        <$> getMetadatas postPaths
     config <- getConfig ()
     let feed = buildFeed config ("tag" </> tag <.> "xml") metadata postPaths
     writeFeed out feed
 
   (base </> "atom.xml") %> \out -> do
     postPaths <- getPostPaths
-    metadata <-
-      filter canPublish
-        <$> traverse (readMetadata readerOptions) postPaths
+    metadata <- filter canPublish <$> getMetadatas postPaths
     config <- getConfig ()
     let feed = buildFeed config ("atom.xml") metadata postPaths
     writeFeed out feed
