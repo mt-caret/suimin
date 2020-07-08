@@ -128,18 +128,23 @@ extractSlugs readerOptions srcPath =
     extract :: P.Pandoc -> Action [String]
     extract = fmap (uniqDesc . snd) . W.runWriterT . processLinks
 
-populateBacklinks :: [T.Text] -> P.Meta -> P.Meta
+populateBacklinks :: [(FilePath, P.Meta)] -> P.Meta -> P.Meta
 populateBacklinks [] = id
 populateBacklinks backlinks =
   P.Meta . update . P.unMeta
   where
+    toMetaValue (path, metadata) =
+      P.MetaMap . M.fromList $
+        [ (T.pack "title", P.MetaString $ getTitle metadata),
+          (T.pack "path", P.MetaString $ T.pack path)
+        ]
     update =
-      M.insert (T.pack "backlinks") (P.MetaList $ map P.MetaString backlinks)
+      M.insert (T.pack "backlinks") . P.MetaList $ map toMetaValue backlinks
 
 buildPost ::
   P.ReaderOptions ->
   P.WriterOptions ->
-  [T.Text] ->
+  [(FilePath, P.Meta)] ->
   (P.Pandoc -> Action P.Pandoc) ->
   FilePath ->
   FilePath ->
@@ -231,9 +236,6 @@ uniqAsc = S.toAscList . S.fromList
 uniqDesc :: Ord a => [a] -> [a]
 uniqDesc = S.toDescList . S.fromList
 
-fromListMonoid :: (Ord k, Monoid m) => [(k, m)] -> M.Map k m
-fromListMonoid = M.fromListWith mappend
-
 rules :: Rules ()
 rules = do
   let base = "_build"
@@ -275,17 +277,17 @@ rules = do
 
   getBacklinks <- newCache $ \() -> do
     postPaths <- getPostPaths
-    let convertToBacklinks :: Ord a => [(b, [a])] -> [(a, [b])]
+    let srcPathToRelOutPath path = "." </> takeBaseName path <.> "html"
+    let convertToBacklinks :: [(FilePath, [a])] -> Action [(a, [(FilePath, P.Meta)])]
         convertToBacklinks mappings =
-          fmap uniqAsc
-            <$> mappings >>= \(path, slugs) ->
-              map (\slug -> (slug, [path])) slugs
-    backlinks <-
-      fmap (M.fromList . convertToBacklinks)
-        . filterM (fmap canPublish . getMetadata . fst)
-        =<< traverse
-          (\path -> (path,) <$> extractSlugs readerOptions path)
-          postPaths
+          traverse flipMapping $
+            mappings >>= \(path, slugs) -> map (\slug -> (slug, [path])) slugs
+          where
+            flipMapping (slug, paths) =
+              (slug,) . zip (map srcPathToRelOutPath paths) <$> getMetadatas paths
+    links <- zip postPaths <$> traverse (extractSlugs readerOptions) postPaths
+    publishableLinks <- filterM (fmap canPublish . getMetadata . fst) links
+    backlinks <- M.fromList <$> convertToBacklinks publishableLinks
     liftIO $ print backlinks
     return backlinks
 
@@ -293,7 +295,7 @@ rules = do
     let src = dropDirectory1 $ out -<.> "md"
     need [src]
     template <- getTemplate $ Just "templates/post.html"
-    backlinks <- map T.pack . fromMaybe [] . M.lookup (takeBaseName out) <$> getBacklinks ()
+    backlinks <- fromMaybe [] . M.lookup (takeBaseName out) <$> getBacklinks ()
     liftIO . print $ out ++ " -> " ++ show backlinks
     buildPost readerOptions (writerOptions template) backlinks expandLinks src out
 
