@@ -1,11 +1,11 @@
 {-# LANGUAGE ApplicativeDo #-}
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
 
 module Main where
 
+import Config (Config (..), readConfig)
 import Control.Monad
 import Control.Monad.Except (throwError)
 import Control.Monad.IO.Class
@@ -16,24 +16,18 @@ import Data.Maybe
 import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
-import qualified Data.Text.Lazy as TL
 import Development.Shake
 import Development.Shake.Command
 import Development.Shake.FilePath
 import Development.Shake.Util
 import qualified Dhall as D
-import GHC.Generics
+import Feed (buildFeed, writeFeed)
 import qualified Network.Wai.Application.Static as WS
 import Network.Wai.Handler.Warp (run)
-import qualified Text.Atom.Feed as A
-import qualified Text.Atom.Feed.Export as AE
 import qualified Text.Pandoc as P
 import qualified Text.Pandoc.Shared as PS
 import qualified Text.Pandoc.Walk as PW
-
-unwrap :: (Show e, MonadFail m) => Either e a -> m a
-unwrap (Left error) = fail $ show error
-unwrap (Right x) = return x
+import Util ((.*), getTitle, safeHead, uniqAsc, uniqDesc, unwrap)
 
 runPandocIO :: MonadIO m => P.PandocIO a -> m a
 runPandocIO io =
@@ -58,9 +52,6 @@ readDoc readerOptions srcPath = runPandocIO $ do
 
 documentToMetadata :: P.Pandoc -> P.Meta
 documentToMetadata (P.Pandoc metadata _) = metadata
-
-(.*) :: (c -> d) -> (a -> b -> c) -> a -> b -> d
-(.*) = (.) . (.)
 
 readMetadata :: P.ReaderOptions -> FilePath -> Action P.Meta
 readMetadata = fmap documentToMetadata .* readDoc
@@ -176,66 +167,6 @@ buildIndexMetadata title predicate =
             $ meta
       )
     . filter (predicate . snd)
-
-safeHead :: [a] -> Maybe a
-safeHead [] = Nothing
-safeHead (x : _) = Just x
-
-getTitle :: P.Meta -> T.Text
-getTitle = PS.stringify . P.docTitle
-
-toEntry :: FilePath -> P.Meta -> A.Entry
-toEntry fullPath metadata =
-  ( A.nullEntry
-      (T.pack fullPath)
-      (A.TextString (getTitle metadata))
-      (PS.stringify (P.docDate metadata))
-  )
-    { A.entryAuthors =
-        (\author -> A.nullPerson {A.personName = PS.stringify author})
-          <$> P.docAuthors metadata
-    }
-
-buildFeed :: Config -> FilePath -> [P.Meta] -> [FilePath] -> A.Feed
-buildFeed config atomPath metadata postPaths =
-  ( A.nullFeed
-      (T.pack (blogRoot config </> atomPath))
-      (A.TextString (T.pack (blogName config)))
-      (fromMaybe (T.pack "") . safeHead . fmap (PS.stringify . P.docDate) $ metadata)
-  )
-    { A.feedEntries = zipWith toEntry fullPostPaths metadata,
-      A.feedLinks = [A.nullLink (T.pack (blogRoot config))]
-    }
-  where
-    fullPostPaths = map (\p -> blogRoot config </> p) postPaths
-
-writeFeed :: MonadIO m => FilePath -> A.Feed -> m ()
-writeFeed path = liftIO . T.writeFile path . TL.toStrict . fromJust . AE.textFeed
-
-data Config = Config
-  { port :: Maybe D.Natural,
-    enableCategories :: Bool,
-    enableTags :: Bool,
-    enableBacklinks :: Bool,
-    blogName :: String,
-    hostName :: String,
-    relativePath :: String
-  }
-  deriving (Generic, Show)
-
-instance D.FromDhall Config
-
-readConfig :: FilePath -> IO Config
-readConfig = D.input D.auto . T.pack
-
-blogRoot :: Config -> FilePath
-blogRoot config = hostName config </> relativePath config
-
-uniqAsc :: Ord a => [a] -> [a]
-uniqAsc = S.toAscList . S.fromList
-
-uniqDesc :: Ord a => [a] -> [a]
-uniqDesc = S.toDescList . S.fromList
 
 rules :: Rules ()
 rules = do

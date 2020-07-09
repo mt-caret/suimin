@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 9d439654c57af6b06cdc423c4ce1ef8245cfa098965a8901597a792fd4d263f4
+-- hash: 07c478f440725674727f679b71df3bada558b4aa2e75d97764b56d7d8c904a14
 
 name:           suimin
 version:        0.1.0.0
@@ -22,6 +22,9 @@ extra-source-files:
 executable suimin
   main-is: Main.hs
   other-modules:
+      Config
+      Feed
+      Util
       Paths_suimin
   hs-source-dirs:
       src
