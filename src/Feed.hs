@@ -11,13 +11,13 @@ import qualified Text.Atom.Feed as A
 import qualified Text.Atom.Feed.Export as AE
 import qualified Text.Pandoc as P
 import qualified Text.Pandoc.Shared as PS
-import Util (getTitle, safeHead)
+import Util (getTitleText, safeHead)
 
 toEntry :: FilePath -> P.Meta -> A.Entry
 toEntry fullPath metadata =
   ( A.nullEntry
       (T.pack fullPath)
-      (A.TextString (getTitle metadata))
+      (A.TextString (getTitleText metadata))
       (PS.stringify (P.docDate metadata))
   )
     { A.entryAuthors =

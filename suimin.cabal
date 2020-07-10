@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 07c478f440725674727f679b71df3bada558b4aa2e75d97764b56d7d8c904a14
+-- hash: 6da3be17c4e4165c3110eb40c91af37ad494788ad5f5d67f581db833faafb6ed
 
 name:           suimin
 version:        0.1.0.0
@@ -24,6 +24,7 @@ executable suimin
   other-modules:
       Config
       Feed
+      Post
       Util
       Paths_suimin
   hs-source-dirs:
@@ -36,8 +37,10 @@ executable suimin
     , mtl
     , pandoc
     , pandoc-types
+    , pretty-show
     , shake
     , text
+    , uri-encode
     , wai-app-static
     , warp
   default-language: Haskell2010

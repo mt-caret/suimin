@@ -24,14 +24,13 @@ import qualified Dhall as D
 import Feed (buildFeed, writeFeed)
 import qualified Network.Wai.Application.Static as WS
 import Network.Wai.Handler.Warp (run)
+import qualified Post
+import Post (Graph, PostData, addLinksToMetadata, buildLinkGraph, buildSlugLookup, expandLinks, getPostData, queryLinkGraph)
 import qualified Text.Pandoc as P
 import qualified Text.Pandoc.Shared as PS
 import qualified Text.Pandoc.Walk as PW
-import Util ((.*), getTitle, safeHead, uniqAsc, uniqDesc, unwrap)
-
-runPandocIO :: MonadIO m => P.PandocIO a -> m a
-runPandocIO io =
-  liftIO $ P.runIO io >>= unwrap
+import Util ((.*), getTitleText, runPandocIO, safeHead, traceM, uniqAsc, uniqDesc, unwrap)
+import Text.Show.Pretty (pPrint, ppShow)
 
 readerOptions :: P.ReaderOptions
 readerOptions =
@@ -61,7 +60,7 @@ isDraft metadata =
   case P.lookupMeta (T.pack "draft") metadata of
     Nothing -> False
     Just (P.MetaBool b) -> b
-    Just m -> error $ "expected MetaBool for 'draft' but found: " ++ (show m)
+    Just m -> error $ "expected MetaBool for 'draft' but found: " ++ (ppShow m)
 
 canPublish :: P.Meta -> Bool
 canPublish = not . isDraft
@@ -72,7 +71,7 @@ getCategory metadata =
     Nothing -> "uncategorized"
     Just (P.MetaString category) -> T.unpack category
     Just (P.MetaInlines inlines) -> T.unpack $ PS.stringify inlines
-    Just m -> error $ "expected MetaString for 'category' but found: " ++ (show m)
+    Just m -> error $ "expected MetaString for 'category' but found: " ++ (ppShow m)
 
 extractTag :: P.MetaValue -> String
 extractTag (P.MetaString tag) = T.unpack tag
@@ -83,67 +82,25 @@ getTags metadata =
   case P.lookupMeta (T.pack "tags") metadata of
     Nothing -> []
     Just (P.MetaList tagMetavalues) -> extractTag <$> tagMetavalues
-    Just m -> error $ "expected MetaList for 'tags' but found: " ++ (show m)
+    Just m -> error $ "expected MetaList for 'tags' but found: " ++ (ppShow m)
 
 writePandoc :: P.WriterOptions -> FilePath -> P.Pandoc -> P.PandocIO ()
 writePandoc writerOptions dstPath document = do
   html <- P.writeHtml5String writerOptions document
   liftIO $ T.writeFile dstPath html
 
-type AccumLinks a = W.WriterT [String] Action a
-
-liftAction :: Action a -> AccumLinks a
-liftAction = W.WriterT . fmap (,mempty)
-
-processLinks :: P.Pandoc -> AccumLinks P.Pandoc
-processLinks = PW.walkM expandLinkInline
-  where
-    expandLinkInline :: P.Inline -> AccumLinks P.Inline
-    expandLinkInline = \case
-      (P.Link alt inlines (url, title)) | T.null url -> do
-        let slug = T.unpack $ PS.stringify inlines
-        let path = "posts" </> slug <.> "md"
-        let link = T.pack ("." </> slug <.> "html")
-        W.tell [slug]
-        newTitle <- liftAction $ getTitle <$> readMetadata readerOptions path
-        return $ P.Link alt [P.Str newTitle] (link, title)
-      x -> return x
-
-expandLinks :: P.Pandoc -> Action P.Pandoc
-expandLinks = fmap fst . W.runWriterT . processLinks
-
-extractSlugs :: P.ReaderOptions -> FilePath -> Action [String]
-extractSlugs readerOptions srcPath =
-  readDoc readerOptions srcPath >>= extract
-  where
-    extract :: P.Pandoc -> Action [String]
-    extract = fmap (uniqDesc . snd) . W.runWriterT . processLinks
-
-populateBacklinks :: [(FilePath, P.Meta)] -> P.Meta -> P.Meta
-populateBacklinks [] = id
-populateBacklinks backlinks =
-  P.Meta . update . P.unMeta
-  where
-    toMetaValue (path, metadata) =
-      P.MetaMap . M.fromList $
-        [ (T.pack "title", P.MetaString $ getTitle metadata),
-          (T.pack "path", P.MetaString $ T.pack path)
-        ]
-    update =
-      M.insert (T.pack "backlinks") . P.MetaList $ map toMetaValue backlinks
-
 buildPost ::
   P.ReaderOptions ->
   P.WriterOptions ->
-  [(FilePath, P.Meta)] ->
+  Graph [PostData] ->
   (P.Pandoc -> Action P.Pandoc) ->
   FilePath ->
   FilePath ->
   Action ()
-buildPost readerOptions writerOptions backlinks walk srcPath dstPath = do
+buildPost readerOptions writerOptions links walk srcPath dstPath = do
   (P.Pandoc metadata blocks) <- readDoc readerOptions srcPath >>= walk
-  let newMetadata = populateBacklinks backlinks metadata
-  liftIO $ print newMetadata
+  let newMetadata = addLinksToMetadata links metadata
+  liftIO $ pPrint newMetadata
   runPandocIO $ writePandoc writerOptions dstPath (P.Pandoc newMetadata blocks)
 
 compileTemplate :: P.PandocMonad m => FilePath -> m (P.Template T.Text)
@@ -168,12 +125,14 @@ buildIndexMetadata title predicate =
       )
     . filter (predicate . snd)
 
+--TODO: this sorts correctly because we put the date first in the filename,
+--possibly should sort by date in metadata?
+getPostPaths :: Action [FilePath]
+getPostPaths = reverse . sort <$> getDirectoryFiles "" ["posts//*.md"]
+
 rules :: Rules ()
 rules = do
   let base = "_build"
-  -- TODO: this sorts correctly because we put the date first in the filename,
-  -- possibly should sort by date in metadata?
-  let getPostPaths = reverse . sort <$> getDirectoryFiles "" ["posts//*.md"]
 
   getConfig <- newCache $ \() -> do
     let configPath = "./config.dhall"
@@ -207,33 +166,25 @@ rules = do
         Nothing -> P.compileDefaultTemplate $ T.pack "html5"
         Just path -> compileTemplate path
 
-  getBacklinks <- newCache $ \() -> do
+  getSlugLookup <- newCache $ \() -> do
     postPaths <- getPostPaths
-    let srcPathToRelOutPath path = "." </> takeBaseName path <.> "html"
-    let convertToBacklinks :: [(FilePath, [a])] -> Action [(a, [(FilePath, P.Meta)])]
-        convertToBacklinks mappings =
-          traverse flipMapping $
-            mappings >>= \(path, slugs) -> map (\slug -> (slug, [path])) slugs
-          where
-            flipMapping (slug, paths) =
-              (slug,) . zip (map srcPathToRelOutPath paths) <$> getMetadatas paths
-    links <- zip postPaths <$> traverse (extractSlugs readerOptions) postPaths
-    publishableLinks <- filterM (fmap canPublish . getMetadata . fst) links
-    backlinks <- M.fromList <$> convertToBacklinks publishableLinks
-    liftIO $ print backlinks
-    return backlinks
+    traceM $ buildSlugLookup getMetadata postPaths
+
+  getLinkGraph <- newCache $ \() -> do
+    postPaths <- getPostPaths
+    slugLookup <- getSlugLookup ()
+    traceM $ buildLinkGraph getMetadata slugLookup readerOptions postPaths
 
   (base </> "posts/*.html") %> \out -> do
     let src = dropDirectory1 $ out -<.> "md"
     need [src]
     template <- getTemplate $ Just "templates/post.html"
     config <- getConfig ()
-    backlinks <-
-      if enableBacklinks config
-        then fromMaybe [] . M.lookup (takeBaseName out) <$> getBacklinks ()
-        else return []
-    liftIO . print $ out ++ " -> " ++ show backlinks
-    buildPost readerOptions (writerOptions template) backlinks expandLinks src out
+    postData <- getPostData getMetadata src
+    links <- queryLinkGraph postData <$> getLinkGraph ()
+    liftIO . putStrLn $ out ++ " -> " ++ ppShow links
+    slugLookup <- getSlugLookup ()
+    buildPost readerOptions (writerOptions template) links (expandLinks slugLookup) src out
 
   (base </> "index.html") %> \out -> do
     let templatePath = "templates/index.html"

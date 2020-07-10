@@ -23,6 +23,8 @@ dependencies:
   - wai-app-static
   - warp
   - dhall
+  - uri-encode
+  - pretty-show
 
 executables:
   suimin:
