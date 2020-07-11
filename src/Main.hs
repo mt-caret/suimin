@@ -25,12 +25,33 @@ import Feed (buildFeed, writeFeed)
 import qualified Network.Wai.Application.Static as WS
 import Network.Wai.Handler.Warp (run)
 import qualified Post
-import Post (Graph, PostData, addLinksToMetadata, buildLinkGraph, buildSlugLookup, expandLinks, getPostData, queryLinkGraph)
+import Post
+  ( Graph,
+    PostData,
+    addLinksToMetadata,
+    buildLinkGraph,
+    buildSlugLookup,
+    expandLinks,
+    getPostData,
+    queryLinkGraph,
+  )
 import qualified Text.Pandoc as P
 import qualified Text.Pandoc.Shared as PS
 import qualified Text.Pandoc.Walk as PW
-import Util ((.*), getTitleText, runPandocIO, safeHead, traceM, uniqAsc, uniqDesc, unwrap)
 import Text.Show.Pretty (pPrint, ppShow)
+import Util
+  ( (.*),
+    canPublish,
+    getTitleText,
+    readDoc,
+    readMetadata,
+    runPandocIO,
+    safeHead,
+    traceM,
+    uniqAsc,
+    uniqDesc,
+    unwrap,
+  )
 
 readerOptions :: P.ReaderOptions
 readerOptions =
@@ -44,27 +65,6 @@ writerOptions template =
     { P.writerTemplate = Just template
     }
 
-readDoc :: P.ReaderOptions -> FilePath -> Action P.Pandoc
-readDoc readerOptions srcPath = runPandocIO $ do
-  content <- liftIO $ T.readFile srcPath
-  P.readMarkdown readerOptions content
-
-documentToMetadata :: P.Pandoc -> P.Meta
-documentToMetadata (P.Pandoc metadata _) = metadata
-
-readMetadata :: P.ReaderOptions -> FilePath -> Action P.Meta
-readMetadata = fmap documentToMetadata .* readDoc
-
-isDraft :: P.Meta -> Bool
-isDraft metadata =
-  case P.lookupMeta (T.pack "draft") metadata of
-    Nothing -> False
-    Just (P.MetaBool b) -> b
-    Just m -> error $ "expected MetaBool for 'draft' but found: " ++ (ppShow m)
-
-canPublish :: P.Meta -> Bool
-canPublish = not . isDraft
-
 getCategory :: P.Meta -> String
 getCategory metadata =
   case P.lookupMeta (T.pack "category") metadata of
@@ -73,16 +73,18 @@ getCategory metadata =
     Just (P.MetaInlines inlines) -> T.unpack $ PS.stringify inlines
     Just m -> error $ "expected MetaString for 'category' but found: " ++ (ppShow m)
 
-extractTag :: P.MetaValue -> String
-extractTag (P.MetaString tag) = T.unpack tag
-extractTag (P.MetaInlines inlines) = T.unpack $ PS.stringify inlines
-
 getTags :: P.Meta -> [String]
-getTags metadata =
-  case P.lookupMeta (T.pack "tags") metadata of
-    Nothing -> []
-    Just (P.MetaList tagMetavalues) -> extractTag <$> tagMetavalues
-    Just m -> error $ "expected MetaList for 'tags' but found: " ++ (ppShow m)
+getTags = extractTags . P.lookupMeta (T.pack "tags")
+  where
+    extractTags :: Maybe P.MetaValue -> [String]
+    extractTags = \case
+      Nothing -> []
+      Just (P.MetaList tagMetavalues) -> extractTag <$> tagMetavalues
+      Just m -> error $ "expected MetaList for 'tags' but found: " ++ (ppShow m)
+    extractTag :: P.MetaValue -> String
+    extractTag = \case
+      (P.MetaString tag) -> T.unpack tag
+      (P.MetaInlines inlines) -> T.unpack $ PS.stringify inlines
 
 writePandoc :: P.WriterOptions -> FilePath -> P.Pandoc -> P.PandocIO ()
 writePandoc writerOptions dstPath document = do
@@ -261,15 +263,3 @@ rules = do
 
 main :: IO ()
 main = shakeArgs shakeOptions {shakeFiles = "_shake"} rules
-
-{- TODO:
- - * [x] show index of all posts
- - * [ ] static assets (css/images/js/etc.)
- - * [x] create atom feed
- - * [ ] new post generation
- - * [ ] syntax highlighting?
- - * [x] drafts
- - * [ ] watch
- - * [x] categories
- - * [x] tags
- -}
