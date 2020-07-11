@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 6da3be17c4e4165c3110eb40c91af37ad494788ad5f5d67f581db833faafb6ed
+-- hash: 52ba28ca369a379bc5b482e43c286f975cbcfcee69d612bc153dc9d47da5bc7d
 
 name:           suimin
 version:        0.1.0.0
@@ -29,6 +29,7 @@ executable suimin
       Paths_suimin
   hs-source-dirs:
       src
+  ghc-options: -Wall -Wcompat -Wincomplete-record-updates -Wincomplete-uni-patterns -Wredundant-constraints
   build-depends:
       base >=4.7 && <5
     , containers
