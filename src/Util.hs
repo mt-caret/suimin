@@ -51,7 +51,7 @@ isDraft metadata =
   case P.lookupMeta (T.pack "draft") metadata of
     Nothing -> False
     Just (P.MetaBool b) -> b
-    Just m -> error $ "expected MetaBool for 'draft' but found: " ++ (ppShow m)
+    Just m -> error $ "expected MetaBool for 'draft' but found: " ++ ppShow m
 
 canPublish :: P.Meta -> Bool
 canPublish = not . isDraft

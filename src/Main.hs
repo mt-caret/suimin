@@ -1,7 +1,5 @@
 {-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TupleSections #-}
 
 module Main where
 
@@ -71,7 +69,7 @@ getCategory metadata =
     Nothing -> "uncategorized"
     Just (P.MetaString category) -> T.unpack category
     Just (P.MetaInlines inlines) -> T.unpack $ PS.stringify inlines
-    Just m -> error $ "expected MetaString for 'category' but found: " ++ (ppShow m)
+    Just m -> error $ "expected MetaString for 'category' but found: " ++ ppShow m
 
 getTags :: P.Meta -> [String]
 getTags = extractTags . P.lookupMeta (T.pack "tags")
@@ -80,7 +78,7 @@ getTags = extractTags . P.lookupMeta (T.pack "tags")
     extractTags = \case
       Nothing -> []
       Just (P.MetaList tagMetavalues) -> extractTag <$> tagMetavalues
-      Just m -> error $ "expected MetaList for 'tags' but found: " ++ (ppShow m)
+      Just m -> error $ "expected MetaList for 'tags' but found: " ++ ppShow m
     extractTag :: P.MetaValue -> String
     extractTag = \case
       (P.MetaString tag) -> T.unpack tag
@@ -108,7 +106,7 @@ buildPost readerOptions writerOptions links walk srcPath dstPath = do
 compileTemplate :: P.PandocMonad m => FilePath -> m (P.Template T.Text)
 compileTemplate path = do
   template <- P.getTemplate path
-  (P.runWithPartials $ P.compileTemplate path template) >>= \case
+  P.runWithPartials (P.compileTemplate path template) >>= \case
     Left error -> throwError $ P.PandocTemplateError (T.pack error)
     Right x -> return x
 
@@ -156,7 +154,7 @@ rules = do
       need $ categories >>= (\c -> [bp c <.> "html", bp c <.> "xml"])
     when (enableTags config) $ do
       postPaths <- getPostPaths
-      tags <- uniqAsc . concat . map getTags <$> getMetadatas postPaths
+      tags <- uniqAsc . concatMap getTags <$> getMetadatas postPaths
       let bp t = base </> "tag" </> t
       need $ tags >>= (\t -> [bp t <.> "html", bp t <.> "xml"])
 
@@ -192,7 +190,7 @@ rules = do
     let templatePath = "templates/index.html"
     template <- getTemplate $ Just templatePath
     postPaths <- getPostPaths
-    let relPaths = map (\path -> path -<.> "html") postPaths
+    let relPaths = map (-<.> "html") postPaths
     let buildIndex = buildIndexMetadata "index" (const True)
     metadata <-
       buildIndex . filter (canPublish . snd) . zip relPaths
@@ -227,7 +225,7 @@ rules = do
     template <- getTemplate $ Just "templates/index.html"
     postPaths <- getPostPaths
     let relPaths = map (\path -> "../" </> path -<.> "html") postPaths
-    let buildIndex = buildIndexMetadata tag (any (== tag) . getTags)
+    let buildIndex = buildIndexMetadata tag (elem tag . getTags)
     metadata <-
       buildIndex . filter (canPublish . snd) . zip relPaths
         <$> getMetadatas postPaths
@@ -238,7 +236,7 @@ rules = do
     let tag = takeBaseName out
     postPaths <- getPostPaths
     metadata <-
-      filter (\m -> canPublish m && any (== tag) (getTags m))
+      filter (\m -> canPublish m && elem tag (getTags m))
         <$> getMetadatas postPaths
     config <- getConfig ()
     let feed = buildFeed config ("tag" </> tag <.> "xml") metadata postPaths
@@ -248,7 +246,7 @@ rules = do
     postPaths <- getPostPaths
     metadata <- filter canPublish <$> getMetadatas postPaths
     config <- getConfig ()
-    let feed = buildFeed config ("atom.xml") metadata postPaths
+    let feed = buildFeed config "atom.xml" metadata postPaths
     writeFeed out feed
 
   phony "clean" $ do
@@ -257,7 +255,7 @@ rules = do
 
   phony "serve" $ do
     config <- getConfig ()
-    let httpServerPort = fromMaybe 8000 . fmap fromIntegral $ port config
+    let httpServerPort = maybe 8000 fromIntegral $ port config
     liftIO . putStrLn $ "Running HTTP server on port " ++ show httpServerPort
     liftIO . run httpServerPort . WS.staticApp $ WS.defaultFileServerSettings base
 
