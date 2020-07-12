@@ -7,7 +7,6 @@ import Config (Config (..), readConfig)
 import Control.Monad
 import Control.Monad.Except (throwError)
 import Control.Monad.IO.Class
-import Data.List
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
@@ -113,10 +112,17 @@ buildIndexMetadata title predicate =
       )
     . filter (predicate . snd)
 
+filterPublishable :: (FilePath -> Action P.Meta) -> [FilePath] -> Action [FilePath]
+filterPublishable getMetadata sourcePaths =
+  map fst . filter (canPublish . snd) . zip sourcePaths
+    <$> traverse getMetadata sourcePaths
+
 --TODO: this sorts correctly because we put the date first in the filename,
 --possibly should sort by date in metadata?
-getPublishableSourcePaths :: Action [FilePath]
-getPublishableSourcePaths = reverse . sort <$> getDirectoryFiles "" ["posts//*.md"]
+getPublishableSourcePaths :: (FilePath -> Action P.Meta) -> Action [FilePath]
+getPublishableSourcePaths getMetadata = do
+  sourcePaths <- getDirectoryFiles "" ["posts//*.md"]
+  filterPublishable getMetadata sourcePaths
 
 rules :: Rules ()
 rules = do
@@ -127,24 +133,26 @@ rules = do
     need [configPath]
     liftIO $ readConfig configPath
 
-  action $ getPublishableSourcePaths >>= need . map (\p -> base </> p -<.> "html")
-
   getMetadata <- newCache $ readMetadata readerOptions
   let getMetadatas :: [FilePath] -> Action [P.Meta]
       getMetadatas = traverse getMetadata
 
   action $ do
+    sourcePaths <- getPublishableSourcePaths getMetadata
+    need $ map (\p -> base </> p -<.> "html") sourcePaths
+
+  action $ do
     config <- getConfig ()
     when (enableCategories config) $ do
-      sourcePaths <- getPublishableSourcePaths
+      sourcePaths <- getPublishableSourcePaths getMetadata
       categories <- uniqAsc . map getCategory <$> getMetadatas sourcePaths
       let bp c = base </> "category" </> c
-      need $ categories >>= (\c -> [bp c <.> "html", bp c <.> "xml"])
+      need $ concatMap (\c -> [bp c <.> "html", bp c <.> "xml"]) categories
     when (enableTags config) $ do
-      sourcePaths <- getPublishableSourcePaths
+      sourcePaths <- getPublishableSourcePaths getMetadata
       tags <- uniqAsc . concatMap getTags <$> getMetadatas sourcePaths
       let bp t = base </> "tag" </> t
-      need $ tags >>= (\t -> [bp t <.> "html", bp t <.> "xml"])
+      need $ concatMap (\t -> [bp t <.> "html", bp t <.> "xml"]) tags
 
   want . fmap (base </>) $ ["index.html", "atom.xml"]
 
@@ -155,83 +163,91 @@ rules = do
         Just path -> compileTemplate path
 
   getSlugLookup <- newCache $ \() -> do
-    sourcePaths <- getPublishableSourcePaths
+    sourcePaths <- getPublishableSourcePaths getMetadata
     traceM $ buildSlugLookup getMetadata sourcePaths
 
   getLinkGraph <- newCache $ \() -> do
-    sourcePaths <- getPublishableSourcePaths
+    sourcePaths <- getPublishableSourcePaths getMetadata
     slugLookup <- getSlugLookup ()
     traceM $ buildLinkGraph getMetadata slugLookup readerOptions sourcePaths
 
   (base </> "posts/*.html") %> \out -> do
-    let src = dropDirectory1 $ out -<.> "md"
-    need [src]
+    let source = dropDirectory1 $ out -<.> "md"
+    need [source]
     template <- getTemplate $ Just "templates/post.html"
-    postData <- getPostData getMetadata src
+    postData <- getPostData getMetadata source
     links <- queryLinkGraph postData <$> getLinkGraph ()
     liftIO . putStrLn $ out ++ " -> " ++ ppShow links
     slugLookup <- getSlugLookup ()
-    buildPost readerOptions (writerOptions template) links (expandLinks slugLookup) src out
+    buildPost
+      readerOptions
+      (writerOptions template)
+      links
+      (expandLinks slugLookup)
+      source
+      out
 
   (base </> "index.html") %> \out -> do
     let templatePath = "templates/index.html"
     template <- getTemplate $ Just templatePath
-    sourcePaths <- getPublishableSourcePaths
+    sourcePaths <- getPublishableSourcePaths getMetadata
     let relativeSourcePaths = map (-<.> "html") sourcePaths
     let buildIndex = buildIndexMetadata "index" (const True)
     metadata <-
-      buildIndex . filter (canPublish . snd) . zip relativeSourcePaths
-        <$> getMetadatas sourcePaths
+      buildIndex . zip relativeSourcePaths <$> getMetadatas sourcePaths
     let document = P.Pandoc metadata []
     runPandocIO $ writePandoc (writerOptions template) out document
 
   (base </> "category/*.html") %> \out -> do
     let category = takeBaseName out
     template <- getTemplate $ Just "templates/index.html"
-    sourcePaths <- getPublishableSourcePaths
-    let relativeSourcePaths = map (\path -> "../" </> path -<.> "html") sourcePaths
+    sourcePaths <- getPublishableSourcePaths getMetadata
+    let relativeSourcePaths =
+          map (\path -> "../" </> path -<.> "html") sourcePaths
     let buildIndex = buildIndexMetadata category ((== category) . getCategory)
     metadata <-
-      buildIndex . filter (canPublish . snd) . zip relativeSourcePaths
-        <$> getMetadatas sourcePaths
+      buildIndex . zip relativeSourcePaths <$> getMetadatas sourcePaths
     let document = P.Pandoc metadata []
     runPandocIO $ writePandoc (writerOptions template) out document
 
   (base </> "category/*.xml") %> \out -> do
     let category = takeBaseName out
-    sourcePaths <- getPublishableSourcePaths
+    sourcePaths <- getPublishableSourcePaths getMetadata
     metadata <-
-      filter (\m -> canPublish m && category == getCategory m)
-        <$> getMetadatas sourcePaths
+      filter ((== category) . getCategory) <$> getMetadatas sourcePaths
     config <- getConfig ()
-    let feed = buildFeed config ("category" </> category <.> "xml") metadata sourcePaths
+    let feed =
+          buildFeed
+            config
+            ("category" </> category <.> "xml")
+            metadata
+            sourcePaths
     writeFeed out feed
 
   (base </> "tag/*.html") %> \out -> do
     let tag = takeBaseName out
     template <- getTemplate $ Just "templates/index.html"
-    sourcePaths <- getPublishableSourcePaths
-    let relativeSourcePaths = map (\path -> "../" </> path -<.> "html") sourcePaths
+    sourcePaths <- getPublishableSourcePaths getMetadata
+    let relativeSourcePaths =
+          map (\path -> "../" </> path -<.> "html") sourcePaths
     let buildIndex = buildIndexMetadata tag (elem tag . getTags)
     metadata <-
-      buildIndex . filter (canPublish . snd) . zip relativeSourcePaths
-        <$> getMetadatas sourcePaths
+      buildIndex . zip relativeSourcePaths <$> getMetadatas sourcePaths
     let document = P.Pandoc metadata []
     runPandocIO $ writePandoc (writerOptions template) out document
 
   (base </> "tag/*.xml") %> \out -> do
     let tag = takeBaseName out
-    sourcePaths <- getPublishableSourcePaths
+    sourcePaths <- getPublishableSourcePaths getMetadata
     metadata <-
-      filter (\m -> canPublish m && elem tag (getTags m))
-        <$> getMetadatas sourcePaths
+      filter (elem tag . getTags) <$> getMetadatas sourcePaths
     config <- getConfig ()
     let feed = buildFeed config ("tag" </> tag <.> "xml") metadata sourcePaths
     writeFeed out feed
 
   (base </> "atom.xml") %> \out -> do
-    sourcePaths <- getPublishableSourcePaths
-    metadata <- filter canPublish <$> getMetadatas sourcePaths
+    sourcePaths <- getPublishableSourcePaths getMetadata
+    metadata <- getMetadatas sourcePaths
     config <- getConfig ()
     let feed = buildFeed config "atom.xml" metadata sourcePaths
     writeFeed out feed
@@ -243,8 +259,9 @@ rules = do
   phony "serve" $ do
     config <- getConfig ()
     let httpServerPort = maybe 8000 fromIntegral $ port config
-    liftIO . putStrLn $ "Running HTTP server on port " ++ show httpServerPort
-    liftIO . run httpServerPort . WS.staticApp $ WS.defaultFileServerSettings base
+    liftIO $ do
+      putStrLn $ "Running HTTP server on port " ++ show httpServerPort
+      run httpServerPort . WS.staticApp $ WS.defaultFileServerSettings base
 
 main :: IO ()
 main = shakeArgs shakeOptions {shakeFiles = "_shake"} rules
