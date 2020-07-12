@@ -19,3 +19,4 @@
 - [ ] support Lucid/Clay/etc.?
 - [ ] some pagerank-like search functionality might be interesting
 - [ ] LSP support for writing posts (maybe gluon-lang/lsp-types?)
+- [ ] `enableBacklinks` -> `enableLinkGraph`
