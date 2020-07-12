@@ -7,22 +7,15 @@ import Config (Config (..), readConfig)
 import Control.Monad
 import Control.Monad.Except (throwError)
 import Control.Monad.IO.Class
-import qualified Control.Monad.Writer.Strict as W
 import Data.List
 import qualified Data.Map.Strict as M
-import Data.Maybe
-import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import Development.Shake
-import Development.Shake.Command
 import Development.Shake.FilePath
-import Development.Shake.Util
-import qualified Dhall as D
 import Feed (buildFeed, writeFeed)
 import qualified Network.Wai.Application.Static as WS
 import Network.Wai.Handler.Warp (run)
-import qualified Post
 import Post
   ( Graph,
     PostData,
@@ -35,20 +28,14 @@ import Post
   )
 import qualified Text.Pandoc as P
 import qualified Text.Pandoc.Shared as PS
-import qualified Text.Pandoc.Walk as PW
 import Text.Show.Pretty (pPrint, ppShow)
 import Util
-  ( (.*),
-    canPublish,
-    getTitleText,
+  ( canPublish,
     readDoc,
     readMetadata,
     runPandocIO,
-    safeHead,
     traceM,
     uniqAsc,
-    uniqDesc,
-    unwrap,
   )
 
 readerOptions :: P.ReaderOptions
@@ -83,10 +70,11 @@ getTags = extractTags . P.lookupMeta (T.pack "tags")
     extractTag = \case
       (P.MetaString tag) -> T.unpack tag
       (P.MetaInlines inlines) -> T.unpack $ PS.stringify inlines
+      m -> error $ "expected string-like value for tag but found: " ++ ppShow m
 
 writePandoc :: P.WriterOptions -> FilePath -> P.Pandoc -> P.PandocIO ()
-writePandoc writerOptions dstPath document = do
-  html <- P.writeHtml5String writerOptions document
+writePandoc writerOpts dstPath document = do
+  html <- P.writeHtml5String writerOpts document
   liftIO $ T.writeFile dstPath html
 
 buildPost ::
@@ -97,17 +85,17 @@ buildPost ::
   FilePath ->
   FilePath ->
   Action ()
-buildPost readerOptions writerOptions links walk srcPath dstPath = do
-  (P.Pandoc metadata blocks) <- readDoc readerOptions srcPath >>= walk
+buildPost readerOpts writerOpts links walk srcPath dstPath = do
+  (P.Pandoc metadata blocks) <- readDoc readerOpts srcPath >>= walk
   let newMetadata = addLinksToMetadata links metadata
   liftIO $ pPrint newMetadata
-  runPandocIO $ writePandoc writerOptions dstPath (P.Pandoc newMetadata blocks)
+  runPandocIO $ writePandoc writerOpts dstPath (P.Pandoc newMetadata blocks)
 
 compileTemplate :: P.PandocMonad m => FilePath -> m (P.Template T.Text)
 compileTemplate path = do
   template <- P.getTemplate path
   P.runWithPartials (P.compileTemplate path template) >>= \case
-    Left error -> throwError $ P.PandocTemplateError (T.pack error)
+    Left e -> throwError $ P.PandocTemplateError (T.pack e)
     Right x -> return x
 
 buildIndexMetadata :: String -> (P.Meta -> Bool) -> [(FilePath, P.Meta)] -> P.Meta
@@ -127,8 +115,8 @@ buildIndexMetadata title predicate =
 
 --TODO: this sorts correctly because we put the date first in the filename,
 --possibly should sort by date in metadata?
-getPostPaths :: Action [FilePath]
-getPostPaths = reverse . sort <$> getDirectoryFiles "" ["posts//*.md"]
+getPublishableSourcePaths :: Action [FilePath]
+getPublishableSourcePaths = reverse . sort <$> getDirectoryFiles "" ["posts//*.md"]
 
 rules :: Rules ()
 rules = do
@@ -139,7 +127,7 @@ rules = do
     need [configPath]
     liftIO $ readConfig configPath
 
-  action $ getPostPaths >>= need . map (\p -> base </> p -<.> "html")
+  action $ getPublishableSourcePaths >>= need . map (\p -> base </> p -<.> "html")
 
   getMetadata <- newCache $ readMetadata readerOptions
   let getMetadatas :: [FilePath] -> Action [P.Meta]
@@ -148,13 +136,13 @@ rules = do
   action $ do
     config <- getConfig ()
     when (enableCategories config) $ do
-      postPaths <- getPostPaths
-      categories <- uniqAsc . map getCategory <$> getMetadatas postPaths
+      sourcePaths <- getPublishableSourcePaths
+      categories <- uniqAsc . map getCategory <$> getMetadatas sourcePaths
       let bp c = base </> "category" </> c
       need $ categories >>= (\c -> [bp c <.> "html", bp c <.> "xml"])
     when (enableTags config) $ do
-      postPaths <- getPostPaths
-      tags <- uniqAsc . concatMap getTags <$> getMetadatas postPaths
+      sourcePaths <- getPublishableSourcePaths
+      tags <- uniqAsc . concatMap getTags <$> getMetadatas sourcePaths
       let bp t = base </> "tag" </> t
       need $ tags >>= (\t -> [bp t <.> "html", bp t <.> "xml"])
 
@@ -167,19 +155,18 @@ rules = do
         Just path -> compileTemplate path
 
   getSlugLookup <- newCache $ \() -> do
-    postPaths <- getPostPaths
-    traceM $ buildSlugLookup getMetadata postPaths
+    sourcePaths <- getPublishableSourcePaths
+    traceM $ buildSlugLookup getMetadata sourcePaths
 
   getLinkGraph <- newCache $ \() -> do
-    postPaths <- getPostPaths
+    sourcePaths <- getPublishableSourcePaths
     slugLookup <- getSlugLookup ()
-    traceM $ buildLinkGraph getMetadata slugLookup readerOptions postPaths
+    traceM $ buildLinkGraph getMetadata slugLookup readerOptions sourcePaths
 
   (base </> "posts/*.html") %> \out -> do
     let src = dropDirectory1 $ out -<.> "md"
     need [src]
     template <- getTemplate $ Just "templates/post.html"
-    config <- getConfig ()
     postData <- getPostData getMetadata src
     links <- queryLinkGraph postData <$> getLinkGraph ()
     liftIO . putStrLn $ out ++ " -> " ++ ppShow links
@@ -189,64 +176,64 @@ rules = do
   (base </> "index.html") %> \out -> do
     let templatePath = "templates/index.html"
     template <- getTemplate $ Just templatePath
-    postPaths <- getPostPaths
-    let relPaths = map (-<.> "html") postPaths
+    sourcePaths <- getPublishableSourcePaths
+    let relativeSourcePaths = map (-<.> "html") sourcePaths
     let buildIndex = buildIndexMetadata "index" (const True)
     metadata <-
-      buildIndex . filter (canPublish . snd) . zip relPaths
-        <$> getMetadatas postPaths
+      buildIndex . filter (canPublish . snd) . zip relativeSourcePaths
+        <$> getMetadatas sourcePaths
     let document = P.Pandoc metadata []
     runPandocIO $ writePandoc (writerOptions template) out document
 
   (base </> "category/*.html") %> \out -> do
     let category = takeBaseName out
     template <- getTemplate $ Just "templates/index.html"
-    postPaths <- getPostPaths
-    let relPaths = map (\path -> "../" </> path -<.> "html") postPaths
+    sourcePaths <- getPublishableSourcePaths
+    let relativeSourcePaths = map (\path -> "../" </> path -<.> "html") sourcePaths
     let buildIndex = buildIndexMetadata category ((== category) . getCategory)
     metadata <-
-      buildIndex . filter (canPublish . snd) . zip relPaths
-        <$> getMetadatas postPaths
+      buildIndex . filter (canPublish . snd) . zip relativeSourcePaths
+        <$> getMetadatas sourcePaths
     let document = P.Pandoc metadata []
     runPandocIO $ writePandoc (writerOptions template) out document
 
   (base </> "category/*.xml") %> \out -> do
     let category = takeBaseName out
-    postPaths <- getPostPaths
+    sourcePaths <- getPublishableSourcePaths
     metadata <-
       filter (\m -> canPublish m && category == getCategory m)
-        <$> getMetadatas postPaths
+        <$> getMetadatas sourcePaths
     config <- getConfig ()
-    let feed = buildFeed config ("category" </> category <.> "xml") metadata postPaths
+    let feed = buildFeed config ("category" </> category <.> "xml") metadata sourcePaths
     writeFeed out feed
 
   (base </> "tag/*.html") %> \out -> do
     let tag = takeBaseName out
     template <- getTemplate $ Just "templates/index.html"
-    postPaths <- getPostPaths
-    let relPaths = map (\path -> "../" </> path -<.> "html") postPaths
+    sourcePaths <- getPublishableSourcePaths
+    let relativeSourcePaths = map (\path -> "../" </> path -<.> "html") sourcePaths
     let buildIndex = buildIndexMetadata tag (elem tag . getTags)
     metadata <-
-      buildIndex . filter (canPublish . snd) . zip relPaths
-        <$> getMetadatas postPaths
+      buildIndex . filter (canPublish . snd) . zip relativeSourcePaths
+        <$> getMetadatas sourcePaths
     let document = P.Pandoc metadata []
     runPandocIO $ writePandoc (writerOptions template) out document
 
   (base </> "tag/*.xml") %> \out -> do
     let tag = takeBaseName out
-    postPaths <- getPostPaths
+    sourcePaths <- getPublishableSourcePaths
     metadata <-
       filter (\m -> canPublish m && elem tag (getTags m))
-        <$> getMetadatas postPaths
+        <$> getMetadatas sourcePaths
     config <- getConfig ()
-    let feed = buildFeed config ("tag" </> tag <.> "xml") metadata postPaths
+    let feed = buildFeed config ("tag" </> tag <.> "xml") metadata sourcePaths
     writeFeed out feed
 
   (base </> "atom.xml") %> \out -> do
-    postPaths <- getPostPaths
-    metadata <- filter canPublish <$> getMetadatas postPaths
+    sourcePaths <- getPublishableSourcePaths
+    metadata <- filter canPublish <$> getMetadatas sourcePaths
     config <- getConfig ()
-    let feed = buildFeed config "atom.xml" metadata postPaths
+    let feed = buildFeed config "atom.xml" metadata sourcePaths
     writeFeed out feed
 
   phony "clean" $ do

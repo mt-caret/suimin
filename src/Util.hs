@@ -10,7 +10,7 @@ import qualified Text.Pandoc.Shared as PS
 import Text.Show.Pretty (pPrint, ppShow)
 
 unwrap :: (Show e, MonadFail m) => Either e a -> m a
-unwrap (Left error) = fail $ show error
+unwrap (Left e) = fail $ show e
 unwrap (Right x) = return x
 
 safeHead :: [a] -> Maybe a
@@ -39,9 +39,9 @@ runPandocIO io =
   liftIO $ P.runIO io >>= unwrap
 
 readDoc :: P.ReaderOptions -> FilePath -> Action P.Pandoc
-readDoc readerOptions srcPath = runPandocIO $ do
+readDoc readerOpts srcPath = runPandocIO $ do
   content <- liftIO $ T.readFile srcPath
-  P.readMarkdown readerOptions content
+  P.readMarkdown readerOpts content
 
 readMetadata :: P.ReaderOptions -> FilePath -> Action P.Meta
 readMetadata = fmap documentToMetadata .* readDoc
