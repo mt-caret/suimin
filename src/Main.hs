@@ -124,9 +124,20 @@ getPublishableSourcePaths getMetadata = do
   sourcePaths <- getDirectoryFiles "" ["posts//*.md"]
   filterPublishable getMetadata sourcePaths
 
+staticAssets :: FilePath -> Rules ()
+staticAssets base = do
+  action $ do
+    sourcePaths <- getDirectoryFiles "" ["static//*"]
+    need $ map (base </>) sourcePaths
+
+  (base </> "static//*") %> \out -> do
+    let source = dropDirectory1 out
+    copyFile' source out
+
 rules :: Rules ()
 rules = do
   let base = "_build"
+  staticAssets base
 
   getConfig <- newCache $ \() -> do
     let configPath = "./config.dhall"
