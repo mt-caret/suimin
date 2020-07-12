@@ -1,6 +1,6 @@
 module Feed where
 
-import Config (Config (..), blogRoot)
+import Config (Config (..), siteRoot)
 import Control.Monad.IO.Class
 import Data.Maybe
 import qualified Data.Text as T
@@ -28,15 +28,15 @@ toEntry fullPath metadata =
 buildFeed :: Config -> FilePath -> [P.Meta] -> [FilePath] -> A.Feed
 buildFeed config atomPath metadata postPaths =
   ( A.nullFeed
-      (T.pack (blogRoot config </> atomPath))
-      (A.TextString (T.pack (blogName config)))
+      (T.pack (siteRoot config </> atomPath))
+      (A.TextString (T.pack (siteName config)))
       (fromMaybe (T.pack "") . safeHead . fmap (PS.stringify . P.docDate) $ metadata)
   )
     { A.feedEntries = zipWith toEntry fullPostPaths metadata,
-      A.feedLinks = [A.nullLink (T.pack (blogRoot config))]
+      A.feedLinks = [A.nullLink (T.pack (siteRoot config))]
     }
   where
-    fullPostPaths = map (\p -> blogRoot config </> p) postPaths
+    fullPostPaths = map (\p -> siteRoot config </> p) postPaths
 
 writeFeed :: MonadIO m => FilePath -> A.Feed -> m ()
 writeFeed path = liftIO . T.writeFile path . TL.toStrict . fromJust . AE.textFeed

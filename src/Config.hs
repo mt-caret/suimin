@@ -12,9 +12,9 @@ data Config = Config
     enableCategories :: Bool,
     enableTags :: Bool,
     enableBacklinks :: Bool,
-    blogName :: String,
+    siteName :: String,
     hostName :: String,
-    relativePath :: String
+    relativePath :: Maybe String
   }
   deriving (Generic, Show)
 
@@ -23,5 +23,8 @@ instance D.FromDhall Config
 readConfig :: FilePath -> IO Config
 readConfig = D.input D.auto . T.pack
 
-blogRoot :: Config -> FilePath
-blogRoot config = hostName config </> relativePath config
+siteRoot :: Config -> FilePath
+siteRoot config =
+  case relativePath config of
+    Nothing -> hostName config
+    Just relPath -> hostName config </> relPath
