@@ -3,7 +3,7 @@
 ## TODO
 
 - [x] show index of all posts
-- [ ] static assets (css/images/js/etc.)
+- [x] static assets (css/images/js/etc.)
 - [x] create atom feed
 - [ ] new post generation
 - [ ] syntax highlighting?
