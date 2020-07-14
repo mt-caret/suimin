@@ -31,6 +31,9 @@ infix 8 .* -- weaker than (.)
 getTitleText :: P.Meta -> T.Text
 getTitleText = PS.stringify . P.docTitle
 
+getDateText :: P.Meta -> T.Text
+getDateText = PS.stringify . P.docDate
+
 documentToMetadata :: P.Pandoc -> P.Meta
 documentToMetadata (P.Pandoc metadata _) = metadata
 

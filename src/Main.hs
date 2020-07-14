@@ -7,6 +7,7 @@ import Config (Config (..), readConfig)
 import Control.Monad
 import Control.Monad.Except (throwError)
 import Control.Monad.IO.Class
+import Data.List
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
@@ -30,6 +31,7 @@ import qualified Text.Pandoc.Shared as PS
 import Text.Show.Pretty (pPrint, ppShow)
 import Util
   ( canPublish,
+    getDateText,
     readDoc,
     readMetadata,
     runPandocIO,
@@ -110,6 +112,8 @@ buildIndexMetadata title predicate =
             . P.unMeta
             $ meta
       )
+    . reverse
+    . sortOn (getDateText . snd)
     . filter (predicate . snd)
 
 filterPublishable :: (FilePath -> Action P.Meta) -> [FilePath] -> Action [FilePath]
@@ -117,11 +121,10 @@ filterPublishable getMetadata sourcePaths =
   map fst . filter (canPublish . snd) . zip sourcePaths
     <$> traverse getMetadata sourcePaths
 
---TODO: this sorts correctly because we put the date first in the filename,
---possibly should sort by date in metadata?
+-- returns list of non-draft source paths, sorted alphabetically descending
 getPublishableSourcePaths :: (FilePath -> Action P.Meta) -> Action [FilePath]
 getPublishableSourcePaths getMetadata = do
-  sourcePaths <- getDirectoryFiles "" ["posts//*.md"]
+  sourcePaths <- reverse . sort <$> getDirectoryFiles "" ["posts//*.md"]
   filterPublishable getMetadata sourcePaths
 
 staticAssets :: FilePath -> Rules ()
