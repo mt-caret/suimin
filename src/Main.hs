@@ -28,7 +28,7 @@ import Post
   )
 import qualified Text.Pandoc as P
 import qualified Text.Pandoc.Shared as PS
-import Text.Show.Pretty (pPrint, ppShow)
+import Text.Show.Pretty (ppShow)
 import Util
   ( canPublish,
     getDateText,
@@ -89,7 +89,7 @@ buildPost ::
 buildPost readerOpts writerOpts links walk srcPath dstPath = do
   (P.Pandoc metadata blocks) <- readDoc readerOpts srcPath >>= walk
   let newMetadata = addLinksToMetadata links metadata
-  liftIO $ pPrint newMetadata
+  putVerbose $ ppShow newMetadata
   runPandocIO $ writePandoc writerOpts dstPath (P.Pandoc newMetadata blocks)
 
 compileTemplate :: P.PandocMonad m => FilePath -> m (P.Template T.Text)
@@ -187,11 +187,11 @@ rules = do
 
   (base </> "posts/*.html") %> \out -> do
     let source = dropDirectory1 $ out -<.> "md"
+    putInfo $ source ++ " -> " ++ out
     need [source]
     template <- getTemplate $ Just "templates/post.html"
     postData <- getPostData getMetadata source
     links <- queryLinkGraph postData <$> getLinkGraph ()
-    liftIO . putStrLn $ out ++ " -> " ++ ppShow links
     slugLookup <- getSlugLookup ()
     buildPost
       readerOptions
@@ -202,6 +202,7 @@ rules = do
       out
 
   (base </> "index.html") %> \out -> do
+    putInfo $ "building " ++ out
     let templatePath = "templates/index.html"
     template <- getTemplate $ Just templatePath
     sourcePaths <- getPublishableSourcePaths getMetadata
@@ -213,6 +214,7 @@ rules = do
     runPandocIO $ writePandoc (writerOptions template) out document
 
   (base </> "category/*.html") %> \out -> do
+    putInfo $ "building " ++ out
     let category = takeBaseName out
     template <- getTemplate $ Just "templates/index.html"
     sourcePaths <- getPublishableSourcePaths getMetadata
@@ -225,6 +227,7 @@ rules = do
     runPandocIO $ writePandoc (writerOptions template) out document
 
   (base </> "category/*.xml") %> \out -> do
+    putInfo $ "building " ++ out
     let category = takeBaseName out
     sourcePaths <- getPublishableSourcePaths getMetadata
     metadata <-
@@ -239,6 +242,7 @@ rules = do
     writeFeed out feed
 
   (base </> "tag/*.html") %> \out -> do
+    putInfo $ "building " ++ out
     let tag = takeBaseName out
     template <- getTemplate $ Just "templates/index.html"
     sourcePaths <- getPublishableSourcePaths getMetadata
@@ -251,6 +255,7 @@ rules = do
     runPandocIO $ writePandoc (writerOptions template) out document
 
   (base </> "tag/*.xml") %> \out -> do
+    putInfo $ "building " ++ out
     let tag = takeBaseName out
     sourcePaths <- getPublishableSourcePaths getMetadata
     metadata <-
@@ -260,6 +265,7 @@ rules = do
     writeFeed out feed
 
   (base </> "atom.xml") %> \out -> do
+    putInfo $ "building " ++ out
     sourcePaths <- getPublishableSourcePaths getMetadata
     metadata <- getMetadatas sourcePaths
     config <- getConfig ()
@@ -273,9 +279,8 @@ rules = do
   phony "serve" $ do
     config <- getConfig ()
     let httpServerPort = maybe 8000 fromIntegral $ port config
-    liftIO $ do
-      putStrLn $ "Running HTTP server on port " ++ show httpServerPort
-      run httpServerPort . WS.staticApp $ WS.defaultFileServerSettings base
+    putInfo $ "Running HTTP server on port " ++ show httpServerPort
+    liftIO . run httpServerPort . WS.staticApp $ WS.defaultFileServerSettings base
 
 main :: IO ()
 main = shakeArgs shakeOptions {shakeFiles = "_shake"} rules

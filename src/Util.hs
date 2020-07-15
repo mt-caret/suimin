@@ -7,7 +7,7 @@ import Development.Shake
 import qualified Data.Text.IO as T
 import qualified Text.Pandoc as P
 import qualified Text.Pandoc.Shared as PS
-import Text.Show.Pretty (pPrint, ppShow)
+import Text.Show.Pretty (ppShow)
 
 unwrap :: (Show e, MonadFail m) => Either e a -> m a
 unwrap (Left e) = fail $ show e
@@ -59,8 +59,8 @@ isDraft metadata =
 canPublish :: P.Meta -> Bool
 canPublish = not . isDraft
 
-traceM :: (MonadIO m, Show a) => m a -> m a
+traceM :: Show a => Action a -> Action a
 traceM mx = do
   x <- mx
-  liftIO $ pPrint x
+  putVerbose $ ppShow x
   return x
