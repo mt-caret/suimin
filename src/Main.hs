@@ -147,7 +147,9 @@ rules = do
     need [configPath]
     liftIO $ readConfig configPath
 
-  getMetadata <- newCache $ readMetadata readerOptions
+  getMetadata <- newCache $ \sourcePath -> do
+    need [sourcePath]
+    readMetadata readerOptions sourcePath
   let getMetadatas :: [FilePath] -> Action [P.Meta]
       getMetadatas = traverse getMetadata
 
@@ -171,17 +173,19 @@ rules = do
   want . fmap (base </>) $ ["index.html", "atom.xml"]
 
   getTemplate <- newCache $
-    runPandocIO
-      . \case
-        Nothing -> P.compileDefaultTemplate $ T.pack "html5"
-        Just path -> compileTemplate path
+    \case
+      Nothing -> runPandocIO . P.compileDefaultTemplate $ T.pack "html5"
+      Just path -> need [path] *> runPandocIO (compileTemplate path)
 
   getSlugLookup <- newCache $ \() -> do
     sourcePaths <- getPublishableSourcePaths getMetadata
+    need sourcePaths
     traceM $ buildSlugLookup getMetadata sourcePaths
 
+  -- TODO: possbily cache at the level of queryLinkGraph to reduce rebuilds?
   getLinkGraph <- newCache $ \() -> do
     sourcePaths <- getPublishableSourcePaths getMetadata
+    need sourcePaths
     slugLookup <- getSlugLookup ()
     traceM $ buildLinkGraph getMetadata slugLookup readerOptions sourcePaths
 
