@@ -32,6 +32,7 @@ import Text.Show.Pretty (ppShow)
 import Util
   ( canPublish,
     getDateText,
+    hasMath,
     readDoc,
     readMetadata,
     runPandocIO,
@@ -39,16 +40,28 @@ import Util
     uniqAsc,
   )
 
+disableExtensions :: [P.Extension] -> P.Extensions -> P.Extensions
+disableExtensions = flip (foldr P.disableExtension)
+
+extensions :: P.Extensions
+extensions =
+  disableExtensions [] $
+    P.pandocExtensions
+      <> P.extensionsFromList
+        [P.Ext_raw_tex]
+
 readerOptions :: P.ReaderOptions
 readerOptions =
   P.def
-    { P.readerExtensions = P.pandocExtensions
+    { P.readerExtensions = extensions
     }
 
 writerOptions :: P.Template T.Text -> P.WriterOptions
 writerOptions template =
   P.def
-    { P.writerTemplate = Just template
+    { P.writerTemplate = Just template,
+      P.writerExtensions = extensions,
+      P.writerHTMLMathMethod = P.MathJax P.defaultMathJaxURL
     }
 
 getCategory :: P.Meta -> String
@@ -73,10 +86,12 @@ getTags = extractTags . P.lookupMeta (T.pack "tags")
       (P.MetaInlines inlines) -> T.unpack $ PS.stringify inlines
       m -> error $ "expected string-like value for tag but found: " ++ ppShow m
 
-writePandoc :: P.WriterOptions -> FilePath -> P.Pandoc -> P.PandocIO ()
+writePandoc :: P.WriterOptions -> FilePath -> P.Pandoc -> Action ()
 writePandoc writerOpts dstPath document = do
-  html <- P.writeHtml5String writerOpts document
-  liftIO $ T.writeFile dstPath html
+  html <- runPandocIO $ P.writeHtml5String writerOpts document
+  if hasMath document
+    then command [Stdin (T.unpack html), FileStdout dstPath] "mjpage" ["--dollars"]
+    else liftIO $ T.writeFile dstPath html
 
 buildPost ::
   P.ReaderOptions ->
@@ -90,7 +105,7 @@ buildPost readerOpts writerOpts links walk srcPath dstPath = do
   (P.Pandoc metadata blocks) <- readDoc readerOpts srcPath >>= walk
   let newMetadata = addLinksToMetadata links metadata
   putVerbose $ ppShow newMetadata
-  runPandocIO $ writePandoc writerOpts dstPath (P.Pandoc newMetadata blocks)
+  writePandoc writerOpts dstPath (P.Pandoc newMetadata blocks)
 
 compileTemplate :: P.PandocMonad m => FilePath -> m (P.Template T.Text)
 compileTemplate path = do
@@ -215,7 +230,7 @@ rules = do
     metadata <-
       buildIndex . zip relativeSourcePaths <$> getMetadatas sourcePaths
     let document = P.Pandoc metadata []
-    runPandocIO $ writePandoc (writerOptions template) out document
+    writePandoc (writerOptions template) out document
 
   (base </> "category/*.html") %> \out -> do
     putInfo $ "building " ++ out
@@ -228,7 +243,7 @@ rules = do
     metadata <-
       buildIndex . zip relativeSourcePaths <$> getMetadatas sourcePaths
     let document = P.Pandoc metadata []
-    runPandocIO $ writePandoc (writerOptions template) out document
+    writePandoc (writerOptions template) out document
 
   (base </> "category/*.xml") %> \out -> do
     putInfo $ "building " ++ out
@@ -256,7 +271,7 @@ rules = do
     metadata <-
       buildIndex . zip relativeSourcePaths <$> getMetadatas sourcePaths
     let document = P.Pandoc metadata []
-    runPandocIO $ writePandoc (writerOptions template) out document
+    writePandoc (writerOptions template) out document
 
   (base </> "tag/*.xml") %> \out -> do
     putInfo $ "building " ++ out

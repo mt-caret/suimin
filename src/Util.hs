@@ -1,12 +1,16 @@
+{-# LANGUAGE LambdaCase #-}
+
 module Util where
 
 import Control.Monad.IO.Class
+import qualified Data.Monoid as M
 import qualified Data.Set as S
 import qualified Data.Text as T
-import Development.Shake
 import qualified Data.Text.IO as T
+import Development.Shake
 import qualified Text.Pandoc as P
 import qualified Text.Pandoc.Shared as PS
+import qualified Text.Pandoc.Walk as PW
 import Text.Show.Pretty (ppShow)
 
 unwrap :: (Show e, MonadFail m) => Either e a -> m a
@@ -64,3 +68,12 @@ traceM mx = do
   x <- mx
   putVerbose $ ppShow x
   return x
+
+hasMath :: P.Pandoc -> Bool
+hasMath =
+  M.getAny
+    . PW.query
+      ( \case
+          P.Math _ _ -> M.Any True
+          _ -> M.Any False
+      )
