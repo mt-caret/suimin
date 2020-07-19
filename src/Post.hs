@@ -109,6 +109,9 @@ processLinks slugLookup = PW.walkM expandLinkInline
           title = Title inlines
           slug = slugLookup !? title
           postData = PostData title slug
+          -- TODO: currently, dangling links have titles converted into slugs;
+          -- it seems like this behavior should be different, but not sure
+          -- how...
           link = T.pack . dropDirectory1 $ getOutPath postData
       x -> return x
 

@@ -23,3 +23,4 @@
 - [ ] check for broken internal links
 - [ ] check for broken external links
 - [ ] add 'untagged' tag for posts with no tags
+- [ ] better math support
