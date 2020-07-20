@@ -8,6 +8,7 @@ import Control.Monad
 import Control.Monad.Except (throwError)
 import Control.Monad.IO.Class
 import Data.List
+import qualified Data.Ord as O
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
@@ -127,8 +128,7 @@ buildIndexMetadata title predicate =
             . P.unMeta
             $ meta
       )
-    . reverse
-    . sortOn (getDateText . snd)
+    . sortOn (O.Down . getDateText . snd)
     . filter (predicate . snd)
 
 filterPublishable :: (FilePath -> Action P.Meta) -> [FilePath] -> Action [FilePath]
