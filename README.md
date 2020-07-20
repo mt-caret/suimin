@@ -2,7 +2,7 @@
 
 ## build
 
-`stack install`
+`stack install` or `nix-build -A suimin.components.exes.suimin`
 
 ## dependencies
 
