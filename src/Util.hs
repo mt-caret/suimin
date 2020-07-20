@@ -2,12 +2,14 @@
 
 module Util where
 
+import Control.Monad
 import Control.Monad.IO.Class
 import qualified Data.Monoid as M
 import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import Development.Shake
+import Development.Shake.FilePath
 import qualified Text.Pandoc as P
 import qualified Text.Pandoc.Shared as PS
 import qualified Text.Pandoc.Walk as PW
@@ -77,3 +79,18 @@ hasMath =
           P.Math _ _ -> M.Any True
           _ -> M.Any False
       )
+
+rmIfExists :: FilePath -> Action ()
+rmIfExists path = do
+  exists <- doesFileExist path
+  when exists $ cmd_ "rm" path
+
+cp :: FilePath -> FilePath -> Action ()
+cp old new = do
+  need [old]
+  putVerbose $ "Copying from " ++ old ++ " to " ++ new
+  let dir = takeDirectory new
+  cmd_ "mkdir" "-p" dir
+  rmIfExists new
+  -- TODO: my bet is "--reflink" breaks OSX compatibility
+  cmd_ "cp" "--reflink=auto" old new

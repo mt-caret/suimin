@@ -32,6 +32,7 @@ import qualified Text.Pandoc.Shared as PS
 import Text.Show.Pretty (ppShow)
 import Util
   ( canPublish,
+    cp,
     getDateText,
     hasMath,
     readDoc,
@@ -150,7 +151,7 @@ staticAssets base = do
 
   (base </> "static//*") %> \out -> do
     let source = dropDirectory1 out
-    copyFile' source out
+    cp source out
 
 rules :: Rules ()
 rules = do
@@ -293,7 +294,7 @@ rules = do
 
   phony "clean" $ do
     putInfo "Cleaning files in _build"
-    removeFilesAfter base ["//*.html", "//*.xml"]
+    removeFilesAfter base ["//*.html", "//*.xml", "static//*"]
 
   phony "serve" $ do
     config <- getConfig ()
