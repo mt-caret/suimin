@@ -50,7 +50,9 @@ extensions =
   disableExtensions [] $
     P.pandocExtensions
       <> P.extensionsFromList
-        [P.Ext_raw_tex]
+        [ P.Ext_raw_tex,
+          P.Ext_emoji
+        ]
 
 readerOptions :: P.ReaderOptions
 readerOptions =
