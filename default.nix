@@ -13,12 +13,21 @@
 
   # import nixpkgs with overlays
 , pkgs ? import nixpkgsSrc nixpkgsArgs
-}: pkgs.haskell-nix.project {
+}:
+let
+  isDir = path: builtins.pathExists (builtins.toPath path + "/.");
+in
+pkgs.haskell-nix.project {
   # 'cleanGit' cleans a source directory based on the files known by git
-  src = pkgs.haskell-nix.haskellLib.cleanGit {
-    name = "suimin";
-    src = ./.;
-  };
+  src =
+    if isDir ./.git
+    then
+      pkgs.haskell-nix.haskellLib.cleanGit {
+        name = "suimin";
+        src = ./.;
+      }
+    else
+      ./.;
   # For `cabal.project` based projects specify the GHC version to use.
   compiler-nix-name = "ghc883"; # Not used for `stack.yaml` based projects.
 }
